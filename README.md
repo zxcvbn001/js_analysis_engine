@@ -349,39 +349,6 @@ release/js-analysis-engine-YYYYMMDD-HHMMSS.zip
 
 发布包包含源码、文档、配置模板和 npm 元数据；不包含本地密钥、日志、构建产物、依赖目录、缓存和历史发布包。
 
-## GitHub 开源上传清单
-
-建议上传：
-
-```text
-src/
-docs/
-config/
-config.example.json
-package.json
-package-lock.json
-tsconfig.json
-vitest.config.ts
-release.bat
-README.md
-LICENSE
-.gitignore
-```
-
-不要上传：
-
-```text
-node_modules/
-dist/
-coverage/
-.npm-cache/
-release/
-logs/
-.env*
-config/config.json
-config/*.local.json
-notes/
-```
 
 ## License
 
