@@ -185,7 +185,7 @@ LLM_TIMEOUT_MS=8000
 
 ## API 概览
 
-API对接文档见：[docs/burp-api.md](docs/api.md)。
+API对接文档见：[docs/api.md](docs/api.md)。
 
 ### 健康检查
 
