@@ -26,6 +26,7 @@ describe('http api', () => {
     const body = response.json();
     expect(body.success).toBe(true);
     expect(body.apis[0].url).toBe('/api/user');
+    expect(body.assets).toEqual([]);
     await app.close();
   });
 

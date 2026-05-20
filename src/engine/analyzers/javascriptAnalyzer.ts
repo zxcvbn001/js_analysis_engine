@@ -4,6 +4,7 @@ import { buildWrapperRegistry } from '../wrapper/wrapperRegistry.js';
 import { extractApis } from '../../extractors/api/apiExtractor.js';
 import { analyzeRisks } from '../../extractors/risk/riskAnalyzer.js';
 import { analyzeSecrets } from '../../extractors/secret/secretAnalyzer.js';
+import { extractAssets } from '../../extractors/assets/assetExtractor.js';
 import { LLMSecretAnalyzer } from '../../llm/analyzers/llmSecretAnalyzer.js';
 import { createLLMProvider } from '../../llm/providers/providerFactory.js';
 import type { AnalysisResponse, AnalyzeMode } from '../../types/results.js';
@@ -23,6 +24,7 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
     const constants = collectStringConstants(ast);
     const wrappers = buildWrapperRegistry(ast);
     const apiExtraction = extractApis(ast, constants, wrappers);
+    const assets = extractAssets(ast);
     const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'fast', sharedLLMAnalyzer);
     const risk = analyzeRisks(ast, apiExtraction.apis);
 
@@ -30,6 +32,7 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       success: true,
       url: input.url,
       apis: apiExtraction.apis,
+      assets,
       params: apiExtraction.params,
       auth: apiExtraction.auth,
       secrets: secretExtraction.secrets,
@@ -39,6 +42,7 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       url: input.url,
       durationMs: Date.now() - startedAt,
       apiCount: response.apis.length,
+      assetCount: response.assets.length,
       paramCount: response.params.length,
       secretCount: response.secrets.length,
       riskCount: response.risk.length,

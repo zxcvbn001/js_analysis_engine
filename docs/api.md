@@ -99,6 +99,7 @@ curl http://127.0.0.1:3000/health
 ## POST /analyze/js
 
 Analyze JavaScript content and recover APIs, parameters, auth signals, secrets, and risks.
+The response also includes recovered static assets such as webpack/vite chunk files when they can be enumerated safely.
 
 ### Supported JavaScript Sources
 
@@ -117,6 +118,7 @@ Modern:
 - Vite import.meta syntax
 - TypeScript syntax
 - axios/fetch/request wrapper style calls
+- request factory calls such as `r()({ url, method, data })`
 ```
 
 ### Request Headers
@@ -208,6 +210,14 @@ Use `mode:"full"` only for explicit user-triggered analysis, because LLM calls m
       "source": "axios.post"
     }
   ],
+  "assets": [
+    {
+      "url": "assets/js/chunk-01d475cb.4ef8f8dc.js",
+      "type": "script",
+      "chunkName": "chunk-01d475cb",
+      "source": "webpack-runtime-return"
+    }
+  ],
   "params": [
     {
       "name": "uid",
@@ -248,6 +258,8 @@ fetch
 axios.get
 axios.post
 service.get
+r()
+requestFactory()
 $.ajax
 $.get
 $.post
@@ -264,6 +276,16 @@ body
 path
 header
 ```
+
+`assets[].type` values:
+
+```text
+script
+style
+asset
+```
+
+`assets` is for static resources recovered from bundler runtime code, for example webpack chunk filename maps. These entries are not HTTP API endpoints and should be displayed separately from `apis`.
 
 `secrets[].severity` values:
 
@@ -331,6 +353,7 @@ This endpoint returns `404` when the task id is unknown. Tasks are kept in memor
     "result": {
       "success": true,
       "apis": [],
+      "assets": [],
       "params": [],
       "auth": [],
       "secrets": [],

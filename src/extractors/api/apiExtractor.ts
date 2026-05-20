@@ -9,6 +9,7 @@ import {
   extractParamsFromConfig,
   extractPathParams,
   extractQueryParams,
+  extractValueParam,
   resolveUrlParams,
 } from '../params/paramExtractor.js';
 import { extractAuthSignals } from '../auth/authExtractor.js';
@@ -65,6 +66,13 @@ interface RecoveredCall {
 function recoverCall(node: t.CallExpression, resolver: ReturnType<typeof createStringResolver>, wrappers: WrapperRegistry): RecoveredCall | undefined {
   if (t.isIdentifier(node.callee) && node.callee.name === 'fetch') {
     return recoverFetch(node, resolver);
+  }
+
+  if (t.isCallExpression(node.callee)) {
+    const recovered = recoverRequestConfigCall(node, resolver, `${calleeName(node.callee.callee)}()`);
+    if (recovered) {
+      return recovered;
+    }
   }
 
     if (t.isMemberExpression(node.callee)) {
@@ -242,6 +250,7 @@ function recoverMethodCall(
   const inlineConfig = method === 'GET' || method === 'HEAD' ? bodyOrConfig : config;
   const bodyParams = t.isObjectExpression(bodyOrConfig) && method !== 'GET' && method !== 'HEAD' ? extractObjectParams(bodyOrConfig, 'body', url) : [];
   const bodyStringParams = method !== 'GET' && method !== 'HEAD' ? extractJsonLikeStringParams(bodyOrConfig, 'body', url) : [];
+  const bodyValueParams = method !== 'GET' && method !== 'HEAD' ? extractValueParam(bodyOrConfig, 'body', url) : [];
   const configParams = t.isObjectExpression(inlineConfig) ? extractParamsFromConfig(inlineConfig, url) : [];
   const headers = t.isObjectExpression(inlineConfig) ? extractHeaders(inlineConfig, url) : [];
   const params = [
@@ -250,6 +259,7 @@ function recoverMethodCall(
     ...resolveUrlParams(urlNode, resolver, url),
     ...bodyParams,
     ...bodyStringParams,
+    ...bodyValueParams,
     ...configParams,
   ];
   const auth = extractAuthSignals(headers, [url, ...headers]);

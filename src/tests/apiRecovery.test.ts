@@ -39,4 +39,37 @@ describe('api recovery', () => {
       expect(result.apis.some((api) => api.url === '/api/internal/delete?id=1' && api.method === 'DELETE')).toBe(true);
     }
   });
+
+  it('recovers request factory calls with config objects', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        function n(e){
+          return r()({url:"/indexData/getIndexList",method:"post",data:e})
+        }
+        const requestFactory = () => axios;
+        requestFactory()({ url: "/factory/list", method: "get", params: { page: pageNo } });
+      `,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.apis).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          url: '/indexData/getIndexList',
+          method: 'POST',
+          source: 'r()',
+        }),
+        expect.objectContaining({
+          url: '/factory/list',
+          method: 'GET',
+          source: 'requestFactory()',
+        }),
+      ]),
+    );
+    expect(result.params.map((param) => param.name)).toEqual(expect.arrayContaining(['e', 'page']));
+  });
 });

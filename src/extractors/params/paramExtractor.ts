@@ -50,6 +50,28 @@ export function extractObjectParams(node: t.Node | null | undefined, location: P
   return params;
 }
 
+export function extractValueParam(node: t.Node | null | undefined, location: ParamResult['location'], api?: string): ParamResult[] {
+  if (!node) {
+    return [];
+  }
+
+  if (t.isIdentifier(node)) {
+    return [{ name: node.name, location, api, source: 'value' }];
+  }
+
+  if (t.isMemberExpression(node)) {
+    const name = memberExpressionName(node);
+    return name ? [{ name, location, api, source: 'value' }] : [];
+  }
+
+  if (t.isCallExpression(node)) {
+    const name = callExpressionName(node);
+    return name ? [{ name, location, api, source: 'value' }] : [];
+  }
+
+  return [];
+}
+
 export function extractJsonLikeStringParams(node: t.Node | null | undefined, location: ParamResult['location'], api?: string): ParamResult[] {
   const fragments = collectStringFragments(node);
   if (fragments.length === 0) {
@@ -109,6 +131,7 @@ export function extractParamsFromConfig(node: t.Node | null | undefined, api?: s
     if (['data', 'body'].includes(name.toLowerCase())) {
       params.push(...extractObjectParams(property.value, 'body', api));
       params.push(...extractJsonLikeStringParams(property.value, 'body', api));
+      params.push(...extractValueParam(property.value, 'body', api));
     }
     if (name.toLowerCase() === 'headers') {
       params.push(...extractObjectParams(property.value, 'header', api));
@@ -156,6 +179,36 @@ export function propertyKeyName(node: t.Node): string | undefined {
   }
   if (t.isStringLiteral(node) || t.isNumericLiteral(node)) {
     return String(node.value);
+  }
+  return undefined;
+}
+
+function memberExpressionName(node: t.MemberExpression): string | undefined {
+  const objectName = t.isIdentifier(node.object)
+    ? node.object.name
+    : t.isMemberExpression(node.object)
+      ? memberExpressionName(node.object)
+      : undefined;
+  const propertyName = t.isIdentifier(node.property)
+    ? node.property.name
+    : t.isStringLiteral(node.property)
+      ? node.property.value
+      : undefined;
+
+  if (!objectName || !propertyName) {
+    return undefined;
+  }
+
+  return `${objectName}.${propertyName}`;
+}
+
+function callExpressionName(node: t.CallExpression): string | undefined {
+  if (t.isIdentifier(node.callee)) {
+    return `${node.callee.name}()`;
+  }
+  if (t.isMemberExpression(node.callee)) {
+    const name = memberExpressionName(node.callee);
+    return name ? `${name}()` : undefined;
   }
   return undefined;
 }

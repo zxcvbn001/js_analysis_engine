@@ -32,10 +32,18 @@ export interface RiskResult {
   evidence?: string;
 }
 
+export interface AssetResult {
+  url: string;
+  type: 'script' | 'style' | 'asset';
+  chunkName?: string;
+  source?: string;
+}
+
 export interface AnalysisResult {
   success: true;
   url?: string;
   apis: ApiResult[];
+  assets: AssetResult[];
   params: ParamResult[];
   auth: string[];
   secrets: SecretResult[];
