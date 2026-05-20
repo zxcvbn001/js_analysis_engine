@@ -1,4 +1,4 @@
-# Burp API Integration Guide
+# API Integration Guide
 
 This document describes the HTTP API exposed by JavaScript Analysis Engine for Burp Suite extensions.
 

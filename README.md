@@ -1,6 +1,6 @@
 # JavaScript Analysis Engine
 
-JavaScript Analysis Engine 是一个面向 Burp Suite 集成与安全分析流程的 JavaScript 攻击面恢复引擎。
+JavaScript Analysis Engine 是一个 JavaScript 攻击面分析工具。
 
 它可以接收 JavaScript 源码或 JavaScript URL，基于轻量级 Node.js + AST 分析管线恢复结构化结果，包括 API、参数、Header、认证信号、Secret 候选和风险提示。
 
@@ -185,7 +185,7 @@ LLM_TIMEOUT_MS=8000
 
 ## API 概览
 
-Burp 插件对接文档见：[docs/burp-api.md](docs/burp-api.md)。
+API对接文档见：[docs/burp-api.md](docs/api.md)。
 
 ### 健康检查
 
