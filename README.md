@@ -12,6 +12,7 @@ JavaScript Analysis Engine 是一个 JavaScript 攻击面分析工具。
 - 支持 `r()({ url, method, data })` 这类 request factory 配置式调用。
 - 从 webpack/vite runtime 中恢复可枚举的静态资源 Chunk，例如 `assets/js/chunk.xxx.js`。
 - 支持字符串传播，包括常量、二元拼接、模板字符串和简单 fallback 表达式。
+- 支持从打包代码里的 `baseUrl`、`baseURL`、`domainName` 配置恢复运行时 API 前缀，并输出可直接请求的 `resolvedUrl`。
 - 提取 Query、Body、Path、Header 参数。
 - 识别认证相关信号，例如 `Authorization`、`Bearer`、`JWT`、`X-Token`。
 - 检测上下文相关的 Secret 候选，例如 JWT、AWS Key、Firebase、SMTP、OSS、内网 URL、Debug Endpoint、测试环境 URL。
@@ -267,7 +268,15 @@ JavaScript 分析成功时返回：
 {
   "success": true,
   "url": "https://target.example/app.js",
-  "apis": [],
+  "apis": [
+    {
+      "url": "/api/user",
+      "resolvedUrl": "https://target.example/api/user",
+      "baseUrl": "https://target.example",
+      "method": "POST",
+      "confidence": "high"
+    }
+  ],
   "assets": [],
   "params": [],
   "auth": [],
@@ -275,6 +284,10 @@ JavaScript 分析成功时返回：
   "risk": []
 }
 ```
+
+`apis[].url` 是从 JavaScript 中恢复出的原始路径，可能是 `/login` 这种相对路径。
+
+`apis[].resolvedUrl` 是引擎能静态恢复运行时 `baseUrl` 时拼出的完整 URL。Burp 对接时应优先使用 `resolvedUrl` 做验证和重放；如果没有该字段，再由 Burp 按页面 URL 或脚本 URL 自行解析相对路径。
 
 错误响应：
 

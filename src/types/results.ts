@@ -3,11 +3,15 @@ export type AnalyzeMode = 'fast' | 'full';
 
 export interface ApiResult {
   url: string;
+  resolvedUrl?: string;
+  baseUrl?: string;
   method?: string;
   params?: string[];
   headers?: string[];
   auth?: string;
   source?: string;
+  confidence?: 'low' | 'medium' | 'high';
+  notes?: string[];
 }
 
 export interface ParamResult {

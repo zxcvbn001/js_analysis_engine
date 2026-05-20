@@ -28,24 +28,46 @@ export function extractApis(ast: t.File, constants: Map<string, string>, wrapper
   const resolver = createStringResolver(constants);
   const apis: ApiResult[] = [];
   const params: ParamResult[] = [];
+  const xhrHeaders = new Map<string, string[]>();
+  const xhrOpenApis = new Map<string, ApiResult>();
   const auth = new Set<string>();
+  const xhrInstances = collectXhrInstances(ast);
 
   traverseAst(ast, {
     CallExpression(path) {
-      const api = recoverCall(path.node, resolver, wrappers);
+      const api = recoverCall(path.node, resolver, wrappers, xhrInstances);
       if (!api) {
         return;
       }
 
+      if (api.xhrHeaderFor) {
+        const values = xhrHeaders.get(api.xhrHeaderFor) ?? [];
+        values.push(...(api.result.headers ?? []));
+        xhrHeaders.set(api.xhrHeaderFor, values);
+        const existingApi = xhrOpenApis.get(api.xhrHeaderFor);
+        if (existingApi) {
+          existingApi.headers = uniqueBy([...(existingApi.headers ?? []), ...(api.result.headers ?? [])], (header) => header);
+          existingApi.auth = existingApi.auth ?? api.result.auth;
+        }
+        params.push(...api.params);
+        for (const signal of api.auth) {
+          auth.add(signal);
+        }
+        return;
+      }
+
+      if (api.xhrInstance) {
+        const headers = xhrHeaders.get(api.xhrInstance) ?? [];
+        api.result.headers = uniqueBy([...(api.result.headers ?? []), ...headers], (header) => header);
+      }
+
       apis.push(api.result);
+      if (api.xhrInstance) {
+        xhrOpenApis.set(api.xhrInstance, api.result);
+      }
       params.push(...api.params);
       for (const signal of api.auth) {
         auth.add(signal);
-      }
-    },
-    NewExpression(path) {
-      if (t.isIdentifier(path.node.callee) && path.node.callee.name === 'XMLHttpRequest') {
-        apis.push({ url: 'XMLHttpRequest', source: 'XMLHttpRequest' });
       }
     },
   });
@@ -61,9 +83,16 @@ interface RecoveredCall {
   result: ApiResult;
   params: ParamResult[];
   auth: string[];
+  xhrInstance?: string;
+  xhrHeaderFor?: string;
 }
 
-function recoverCall(node: t.CallExpression, resolver: ReturnType<typeof createStringResolver>, wrappers: WrapperRegistry): RecoveredCall | undefined {
+function recoverCall(
+  node: t.CallExpression,
+  resolver: ReturnType<typeof createStringResolver>,
+  wrappers: WrapperRegistry,
+  xhrInstances: Set<string>,
+): RecoveredCall | undefined {
   if (t.isIdentifier(node.callee) && node.callee.name === 'fetch') {
     return recoverFetch(node, resolver);
   }
@@ -97,12 +126,12 @@ function recoverCall(node: t.CallExpression, resolver: ReturnType<typeof createS
       return recoverRequestConfigCall(node, resolver, source);
     }
 
-      if (methodName === 'open' && source.endsWith('.open')) {
-        return recoverXhrOpen(node, resolver, source);
+      if (methodName === 'open' && source.endsWith('.open') && objectName && xhrInstances.has(objectName)) {
+        return recoverXhrOpen(node, resolver, source, objectName);
       }
 
-      if (methodName === 'setrequestheader' && source.toLowerCase().endsWith('.setrequestheader')) {
-        return recoverXhrHeader(node, resolver, source);
+      if (methodName === 'setrequestheader' && source.toLowerCase().endsWith('.setrequestheader') && objectName && xhrInstances.has(objectName)) {
+        return recoverXhrHeader(node, resolver, source, objectName);
       }
     }
 
@@ -125,7 +154,7 @@ function recoverJQueryAjax(
 
   if (!t.isObjectExpression(firstArg)) {
     const url = resolver.resolve(firstArg).value;
-    if (!url) {
+    if (!url || !isLikelyRequestUrl(url)) {
       return undefined;
     }
     const params = [...extractPathParams(url, url), ...extractQueryParams(url, url), ...resolveUrlParams(firstArg, resolver, url)];
@@ -157,7 +186,7 @@ function recoverJQueryAjax(
     }
   }
 
-  if (!url) {
+  if (!url || !isLikelyRequestUrl(url)) {
     return undefined;
   }
 
@@ -181,6 +210,7 @@ function recoverXhrHeader(
   node: t.CallExpression,
   resolver: ReturnType<typeof createStringResolver>,
   source: string,
+  xhrInstance: string,
 ): RecoveredCall | undefined {
   const headerNode = node.arguments[0];
   if (!headerNode || !t.isExpression(headerNode)) {
@@ -197,6 +227,7 @@ function recoverXhrHeader(
     result: { url: 'XMLHttpRequest', headers: [header], auth: auth[0], source },
     params: [{ name: header, location: 'header', source }],
     auth,
+    xhrHeaderFor: xhrInstance,
   };
 }
 
@@ -207,7 +238,7 @@ function recoverFetch(node: t.CallExpression, resolver: ReturnType<typeof create
   }
 
   const url = resolver.resolve(urlNode).value;
-  if (!url) {
+  if (!url || !isLikelyRequestUrl(url)) {
     return undefined;
   }
 
@@ -241,7 +272,7 @@ function recoverMethodCall(
   }
 
   const url = resolver.resolve(urlNode).value;
-  if (!url) {
+  if (!url || !isLikelyRequestUrl(url)) {
     return undefined;
   }
 
@@ -296,7 +327,7 @@ function recoverRequestConfigCall(
     }
   }
 
-  if (!url) {
+  if (!url || !isLikelyRequestUrl(url)) {
     return undefined;
   }
 
@@ -311,7 +342,7 @@ function recoverRequestConfigCall(
   };
 }
 
-function recoverXhrOpen(node: t.CallExpression, resolver: ReturnType<typeof createStringResolver>, source: string): RecoveredCall | undefined {
+function recoverXhrOpen(node: t.CallExpression, resolver: ReturnType<typeof createStringResolver>, source: string, xhrInstance: string): RecoveredCall | undefined {
   const methodNode = node.arguments[0];
   const urlNode = node.arguments[1];
   if (!methodNode || !urlNode || !t.isExpression(methodNode) || !t.isExpression(urlNode)) {
@@ -320,7 +351,7 @@ function recoverXhrOpen(node: t.CallExpression, resolver: ReturnType<typeof crea
 
   const method = resolver.resolve(methodNode).value?.toUpperCase();
   const url = resolver.resolve(urlNode).value;
-  if (!url) {
+  if (!url || !isLikelyRequestUrl(url)) {
     return undefined;
   }
 
@@ -329,6 +360,7 @@ function recoverXhrOpen(node: t.CallExpression, resolver: ReturnType<typeof crea
     result: { url, method, params: params.map((param) => param.name), source },
     params,
     auth: extractAuthSignals([], [url]),
+    xhrInstance,
   };
 }
 
@@ -355,6 +387,52 @@ function objectFromMember(node: t.MemberExpression): string | undefined {
 
 function isJQueryObject(name: string | undefined): boolean {
   return name === '$' || name === 'jQuery';
+}
+
+function collectXhrInstances(ast: t.File): Set<string> {
+  const instances = new Set<string>();
+
+  traverseAst(ast, {
+    VariableDeclarator(path) {
+      if (t.isIdentifier(path.node.id) && isXhrNewExpression(path.node.init)) {
+        instances.add(path.node.id.name);
+      }
+    },
+    AssignmentExpression(path) {
+      if (t.isIdentifier(path.node.left) && isXhrNewExpression(path.node.right)) {
+        instances.add(path.node.left.name);
+      }
+    },
+  });
+
+  return instances;
+}
+
+function isXhrNewExpression(node: t.Node | null | undefined): boolean {
+  return Boolean(node && t.isNewExpression(node) && t.isIdentifier(node.callee) && node.callee.name === 'XMLHttpRequest');
+}
+
+function isLikelyRequestUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.length > 2048) {
+    return false;
+  }
+  if (/^(?:XMLHttpRequest|_blank|_self|_parent|_top|true|false|null|undefined|\d+)$/.test(trimmed)) {
+    return false;
+  }
+  if (/^(?:javascript|data|mailto|tel):/i.test(trimmed)) {
+    return false;
+  }
+  if (/^https?:\/\//i.test(trimmed) || /^\/\//.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith('/')) {
+    return true;
+  }
+  if (trimmed.includes('${')) {
+    return trimmed.startsWith('/') || /^https?:/i.test(trimmed);
+  }
+  return false;
 }
 
 function methodFromConfig(config: t.ObjectExpression): string | undefined {
