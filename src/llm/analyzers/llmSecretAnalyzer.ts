@@ -1,4 +1,4 @@
-import type { LLMProvider, LLMSecretResult, SecretContext } from '../../types/llm.js';
+import type { LLMProvider, LLMSecretBatchResult, LLMSecretResult, SecretContext } from '../../types/llm.js';
 import type { SecretResult } from '../../types/results.js';
 import { sha256 } from '../../utils/hash.js';
 import { SecretAnalysisCache } from './secretCache.js';
@@ -27,6 +27,28 @@ export class LLMSecretAnalyzer {
     const result = await this.provider.analyzeSecret(context);
     this.cache.set(key, result);
     return result;
+  }
+
+  async analyzeBatch(contexts: SecretContext[]): Promise<LLMSecretBatchResult[]> {
+    if (!this.provider || contexts.length === 0) {
+      return [];
+    }
+
+    if (this.provider.analyzeSecretsBatch) {
+      return this.provider.analyzeSecretsBatch(contexts);
+    }
+
+    const results: LLMSecretBatchResult[] = [];
+    for (const context of contexts) {
+      const result = await this.analyzeNow(context);
+      if (result) {
+        results.push({
+          id: context.candidate.id,
+          ...result,
+        });
+      }
+    }
+    return results;
   }
 
   isEnabled(): boolean {

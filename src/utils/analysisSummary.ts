@@ -25,6 +25,15 @@ export interface AnalysisLogSummary {
   endpointGroupCount: number;
   exposureGroupCount: number;
   scriptGroupCount: number;
+  llmEnabled: boolean;
+  llmCandidateCount: number;
+  llmQueuedCount: number;
+  llmDroppedCount: number;
+  llmReviewedCount: number;
+  llmConfirmedCount: number;
+  llmRejectedCount: number;
+  llmBatchCount: number;
+  llmBatchSize: number;
 }
 
 export function summarizeContent(input: { content: string; source: 'content' | 'download'; url?: string }): ContentSummary {
@@ -54,6 +63,15 @@ export function summarizeAnalysis(result: AnalysisResult): AnalysisLogSummary {
     endpointGroupCount: result.groups.endpoints.count,
     exposureGroupCount: result.groups.exposures.count,
     scriptGroupCount: result.groups.scripts.count,
+    llmEnabled: result.meta.analysis.llm.enabled,
+    llmCandidateCount: result.meta.analysis.llm.candidateCount,
+    llmQueuedCount: result.meta.analysis.llm.queuedCount,
+    llmDroppedCount: result.meta.analysis.llm.droppedCount,
+    llmReviewedCount: result.meta.analysis.llm.reviewedCount,
+    llmConfirmedCount: result.meta.analysis.llm.confirmedCount,
+    llmRejectedCount: result.meta.analysis.llm.rejectedCount,
+    llmBatchCount: result.meta.analysis.llm.batchCount,
+    llmBatchSize: result.meta.analysis.llm.batchSize,
   };
 }
 

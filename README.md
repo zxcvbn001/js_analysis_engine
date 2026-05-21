@@ -322,7 +322,7 @@ LLM 是可选能力，并且只用于 Secret 候选确认。
 - `/analyze/js` 不传模式或 `mode="full"`：默认 full；如果 LLM 已正确配置，Secret 候选会同步复核，只返回 LLM 确认后的结果，LLM 判定为误报的候选会丢弃。
 - `/analyze/secret`：对单个 candidate + context 调用 LLM 确认。
 
-LLM 限速为 60/min，即每秒最多启动 1 个 LLM 分析任务。引擎不会把完整 JavaScript Bundle 发送给 LLM。LLM 未配置时，full 会退回规则候选，不中断主分析。
+LLM 按 10 个 Secret 候选一组批量复核，限速为 60/min，即每秒最多启动 1 个 LLM 批次。引擎不会把完整 JavaScript Bundle 发送给 LLM。LLM 未配置时，full 会退回规则候选，不中断主分析。
 
 Burp 被动扫描或批量扫描建议显式传 `fast_mode:true`。`full` 更适合用户主动触发的单文件深度分析。
 

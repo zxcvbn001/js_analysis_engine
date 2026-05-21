@@ -25,3 +25,29 @@ export function buildSecretPrompt(input: SecretContext): string {
     ),
   ].join('\n');
 }
+
+export function buildSecretBatchPrompt(input: SecretContext[]): string {
+  return [
+    'You are a JavaScript security analysis expert.',
+    'Decide whether each candidate is a real sensitive information exposure.',
+    'Return JSON only with key: results.',
+    'results must be an array. Each item must contain: id, is_secret, secret_type, severity, confidence, reason.',
+    '',
+    'Candidates:',
+    JSON.stringify(
+      input.map((context) => ({
+        id: context.candidate.id,
+        type: context.candidate.type,
+        value: context.candidate.value,
+        evidence: context.candidate.evidence,
+        variableName: context.candidate.variableName,
+        functionName: context.functionName,
+        nearbyApis: context.nearbyApis,
+        nearbyHeaders: context.nearbyHeaders,
+        context: context.context,
+      })),
+      null,
+      2,
+    ),
+  ].join('\n');
+}

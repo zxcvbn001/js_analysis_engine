@@ -28,6 +28,11 @@ export interface LLMSecretResult {
   reason: string;
 }
 
+export interface LLMSecretBatchResult extends LLMSecretResult {
+  id: string;
+}
+
 export interface LLMProvider {
   analyzeSecret(input: SecretContext): Promise<LLMSecretResult>;
+  analyzeSecretsBatch?(input: SecretContext[]): Promise<LLMSecretBatchResult[]>;
 }

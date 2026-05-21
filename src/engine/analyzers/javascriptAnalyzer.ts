@@ -64,18 +64,19 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       risk,
       findings,
       groups,
+      meta: {
+        analysis: {
+          llm: {
+            ...secretExtraction.llm,
+            batchSize: 10,
+          },
+        },
+      },
     };
     logInfo('analyze_js_success', {
       url: input.url,
       durationMs: Date.now() - startedAt,
       ...summarizeAnalysis(response),
-      llmEnabled: secretExtraction.llm.enabled,
-      llmCandidateCount: secretExtraction.llm.candidateCount,
-      llmQueuedCount: secretExtraction.llm.queuedCount,
-      llmDroppedCount: secretExtraction.llm.droppedCount,
-      llmReviewedCount: secretExtraction.llm.reviewedCount,
-      llmConfirmedCount: secretExtraction.llm.confirmedCount,
-      llmRejectedCount: secretExtraction.llm.rejectedCount,
     });
     return response;
   } catch (error) {

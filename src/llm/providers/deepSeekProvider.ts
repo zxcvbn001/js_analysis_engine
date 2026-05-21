@@ -1,6 +1,6 @@
-import type { LLMProvider, LLMSecretResult, SecretContext } from '../../types/llm.js';
+import type { LLMProvider, LLMSecretBatchResult, LLMSecretResult, SecretContext } from '../../types/llm.js';
 import { getConfig } from '../../config/appConfig.js';
-import { buildSecretPrompt } from '../prompts/secretPrompt.js';
+import { buildSecretBatchPrompt, buildSecretPrompt } from '../prompts/secretPrompt.js';
 
 export interface DeepSeekProviderOptions {
   apiKey: string;
@@ -23,6 +23,17 @@ export class DeepSeekProvider implements LLMProvider {
   }
 
   async analyzeSecret(input: SecretContext): Promise<LLMSecretResult> {
+    const content = await this.completeJson(buildSecretPrompt(input));
+    return normalizeLLMResult(JSON.parse(content));
+  }
+
+  async analyzeSecretsBatch(input: SecretContext[]): Promise<LLMSecretBatchResult[]> {
+    const content = await this.completeJson(buildSecretBatchPrompt(input));
+    const payload = JSON.parse(content) as { results?: unknown[] };
+    return (payload.results ?? []).map(normalizeLLMBatchResult);
+  }
+
+  private async completeJson(prompt: string): Promise<string> {
     if (!this.options.apiKey) {
       throw new Error('LLM_API_KEY is not configured');
     }
@@ -41,7 +52,7 @@ export class DeepSeekProvider implements LLMProvider {
           model: this.options.model,
           temperature: 0,
           response_format: { type: 'json_object' },
-          messages: [{ role: 'user', content: buildSecretPrompt(input) }],
+          messages: [{ role: 'user', content: prompt }],
         }),
         signal: controller.signal,
       });
@@ -56,11 +67,19 @@ export class DeepSeekProvider implements LLMProvider {
         throw new Error('DeepSeek returned an empty response');
       }
 
-      return normalizeLLMResult(JSON.parse(content));
+      return content;
     } finally {
       clearTimeout(timeout);
     }
   }
+}
+
+export function normalizeLLMBatchResult(value: unknown): LLMSecretBatchResult {
+  const raw = value as Partial<LLMSecretBatchResult> & { type?: string; secret_type?: string };
+  return {
+    id: String(raw.id ?? ''),
+    ...normalizeLLMResult(value),
+  };
 }
 
 export function normalizeLLMResult(value: unknown): LLMSecretResult {

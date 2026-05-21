@@ -131,6 +131,7 @@ describe('secret detection', () => {
   });
 
   it('filters sensitive findings to LLM-confirmed results in full mode', async () => {
+    const batchSizes: number[] = [];
     const provider: LLMProvider = {
       async analyzeSecret(input) {
         const isReal = input.candidate.value.includes('Bearer realtoken');
@@ -141,6 +142,20 @@ describe('secret detection', () => {
           confidence: isReal ? 0.95 : 0.1,
           reason: isReal ? 'confirmed token' : 'placeholder false positive',
         };
+      },
+      async analyzeSecretsBatch(input) {
+        batchSizes.push(input.length);
+        return input.map((context) => {
+          const isReal = context.candidate.value.includes('Bearer realtoken');
+          return {
+            id: context.candidate.id,
+            is_secret: isReal,
+            secret_type: 'bearer-token',
+            severity: 'high' as const,
+            confidence: isReal ? 0.95 : 0.1,
+            reason: isReal ? 'confirmed token' : 'placeholder false positive',
+          };
+        });
       },
     };
     const llmAnalyzer = new LLMSecretAnalyzer(provider);
@@ -168,5 +183,54 @@ describe('secret detection', () => {
     );
     expect(result.secrets[0].value).toContain('Bearer realtoken');
     expect(result.findings.filter((finding) => finding.category === '敏感凭据').every((finding) => finding.value?.includes('Bearer realtoken'))).toBe(true);
+    expect(batchSizes).toEqual([2]);
+    expect(result.meta.analysis.llm).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        candidateCount: 2,
+        reviewedCount: 2,
+        confirmedCount: 1,
+        rejectedCount: 1,
+        batchCount: 1,
+        batchSize: 10,
+      }),
+    );
+  });
+
+  it('reviews LLM secrets in batches of ten', async () => {
+    const batchSizes: number[] = [];
+    const provider: LLMProvider = {
+      async analyzeSecret() {
+        throw new Error('single candidate path should not be used');
+      },
+      async analyzeSecretsBatch(input) {
+        batchSizes.push(input.length);
+        return input.map((context) => ({
+          id: context.candidate.id,
+          is_secret: false,
+          secret_type: 'token',
+          severity: 'low' as const,
+          confidence: 0.1,
+          reason: 'test false positive',
+        }));
+      },
+    };
+    const content = Array.from({ length: 23 }, (_, index) => `const token${index} = 'Bearer tokenvalue${index}abcdefghijklmnop';`).join('\n');
+    const result = await analyzeJavaScript({
+      content,
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer(provider),
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(batchSizes).toEqual([10, 10, 3]);
+    expect(result.secrets).toHaveLength(0);
+    expect(result.meta.analysis.llm.reviewedCount).toBe(23);
+    expect(result.meta.analysis.llm.rejectedCount).toBe(23);
+    expect(result.meta.analysis.llm.batchCount).toBe(3);
   });
 });

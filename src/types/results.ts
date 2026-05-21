@@ -71,6 +71,22 @@ export interface FindingGroups {
   };
 }
 
+export interface AnalysisMeta {
+  analysis: {
+    llm: {
+      enabled: boolean;
+      candidateCount: number;
+      queuedCount: number;
+      droppedCount: number;
+      reviewedCount: number;
+      confirmedCount: number;
+      rejectedCount: number;
+      batchCount: number;
+      batchSize: number;
+    };
+  };
+}
+
 export interface AnalysisResult {
   success: true;
   url?: string;
@@ -82,6 +98,7 @@ export interface AnalysisResult {
   risk: RiskResult[];
   findings: FindingResult[];
   groups: FindingGroups;
+  meta: AnalysisMeta;
 }
 
 export interface AnalysisError {
