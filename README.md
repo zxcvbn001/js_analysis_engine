@@ -293,6 +293,14 @@ JavaScript 分析成功时返回：
 
 `findings` 是面向展示和筛选的统一发现项列表，字段包括 `category`、`type`、`value`、`severity`、`confidence`、`source` 和 `evidence`。
 
+`groups` 是面向 Burp 展示的三类聚合：
+
+```text
+groups.endpoints  API/endpoint
+groups.exposures  信息泄露/风险线索
+groups.scripts    webpack/script
+```
+
 错误响应：
 
 ```json
@@ -311,10 +319,12 @@ LLM 是可选能力，并且只用于 Secret 候选确认。
 当前行为：
 
 - `/analyze/js` + `fast_mode=true` 或 `mode="fast"`：不调用 LLM。
-- `/analyze/js` 不传模式或 `mode="full"`：默认 full，Secret 候选会进入后台 LLM 队列做增强确认，主分析仍优先返回规则结果。
+- `/analyze/js` 不传模式或 `mode="full"`：默认 full；如果 LLM 已正确配置，Secret 候选会同步复核，只返回 LLM 确认后的结果，LLM 判定为误报的候选会丢弃。
 - `/analyze/secret`：对单个 candidate + context 调用 LLM 确认。
 
-LLM 队列限速为 60/min，即每秒最多启动 1 个 LLM 分析任务。引擎不会把完整 JavaScript Bundle 发送给 LLM。
+LLM 限速为 60/min，即每秒最多启动 1 个 LLM 分析任务。引擎不会把完整 JavaScript Bundle 发送给 LLM。LLM 未配置时，full 会退回规则候选，不中断主分析。
+
+Burp 被动扫描或批量扫描建议显式传 `fast_mode:true`。`full` 更适合用户主动触发的单文件深度分析。
 
 ## 日志
 
@@ -327,6 +337,8 @@ logs/YYYY-MM-DD.log
 常见事件名：
 
 ```text
+analyze_js_request_received
+analyze_js_content_prepared
 download_js_start
 download_js_success
 download_js_failed
@@ -336,10 +348,13 @@ analyze_js_success
 analyze_js_failed
 analysis_task_queued
 analysis_task_running
+analysis_task_content_prepared
 analysis_task_completed
 analysis_task_failed
 http_request_error
 ```
+
+日志会记录输入和输出摘要，例如 JS 长度、行数、SHA-256、API 数量、Secret 候选数量、findings 分类分布、LLM 候选数和入队数；不会记录完整 JS 原文。
 
 ## 测试
 
@@ -368,6 +383,16 @@ release/js-analysis-engine-YYYYMMDD-HHMMSS.zip
 ```
 
 发布包包含源码、文档、配置模板和 npm 元数据；不包含本地密钥、日志、构建产物、依赖目录、缓存和历史发布包。
+
+## 生产内存建议
+
+分析 1-5MB 以上压缩 bundle 时，建议给 Node.js 配置更大的 heap：
+
+```bash
+NODE_OPTIONS="--max-old-space-size=4096" npm start
+```
+
+如果使用 systemd、PM2 或 Docker，请把 `NODE_OPTIONS=--max-old-space-size=4096` 放入对应环境变量配置中。
 
 
 ## License

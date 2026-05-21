@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeJavaScript } from '../engine/analyzers/javascriptAnalyzer.js';
+import { LLMSecretAnalyzer } from '../llm/analyzers/llmSecretAnalyzer.js';
+import type { LLMProvider } from '../types/llm.js';
 
 describe('secret detection', () => {
   it('detects contextual secret candidates without regex-only output', async () => {
@@ -64,6 +66,27 @@ describe('secret detection', () => {
     expect(apiFinding?.evidence).toContain('afterTwo');
   });
 
+  it('truncates evidence for minified single-line bundles', async () => {
+    const longLine = `const prefix='${'x'.repeat(20000)}';const token='Bearer abcdefghijklmnopqrstuvwxyz12345';fetch('/api/long-line');`;
+    const result = await analyzeJavaScript({
+      content: longLine,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.findings.length).toBeLessThanOrEqual(1000);
+    for (const finding of result.findings) {
+      expect(finding.evidence?.length ?? 0).toBeLessThanOrEqual(2600);
+    }
+    for (const secret of result.secrets) {
+      expect(secret.evidence?.length ?? 0).toBeLessThanOrEqual(2600);
+    }
+  });
+
   it('classifies security findings across frontend attack surface categories', async () => {
     const result = await analyzeJavaScript({
       content: `
@@ -102,5 +125,48 @@ describe('secret detection', () => {
       ]),
     );
     expect(result.findings.some((finding) => finding.type === 'api-endpoint' && finding.value === '/graphql')).toBe(true);
+    expect(result.groups.endpoints.apis.some((api) => api.url === '/graphql')).toBe(true);
+    expect(result.groups.exposures.findings.length).toBeGreaterThan(0);
+    expect(result.groups.scripts.findings.every((finding) => finding.category === 'webpack模块' || finding.source === 'asset')).toBe(true);
+  });
+
+  it('filters sensitive findings to LLM-confirmed results in full mode', async () => {
+    const provider: LLMProvider = {
+      async analyzeSecret(input) {
+        const isReal = input.candidate.value.includes('Bearer realtoken');
+        return {
+          is_secret: isReal,
+          secret_type: 'bearer-token',
+          severity: 'high',
+          confidence: isReal ? 0.95 : 0.1,
+          reason: isReal ? 'confirmed token' : 'placeholder false positive',
+        };
+      },
+    };
+    const llmAnalyzer = new LLMSecretAnalyzer(provider);
+    const result = await analyzeJavaScript({
+      content: `
+        const realToken = 'Bearer realtokenabcdefghijklmnopqrstuvwxyz';
+        const fakeToken = 'Bearer placeholderplaceholder12345';
+      `,
+      mode: 'full',
+      llmAnalyzer,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.secrets).toHaveLength(1);
+    expect(result.secrets[0]).toEqual(
+      expect.objectContaining({
+        type: 'bearer-token',
+        source: 'llm+regex',
+        confidence: 0.95,
+      }),
+    );
+    expect(result.secrets[0].value).toContain('Bearer realtoken');
+    expect(result.findings.filter((finding) => finding.category === '敏感凭据').every((finding) => finding.value?.includes('Bearer realtoken'))).toBe(true);
   });
 });

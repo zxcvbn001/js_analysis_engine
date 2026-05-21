@@ -53,6 +53,24 @@ export interface FindingResult {
   evidence?: string;
 }
 
+export interface FindingGroups {
+  endpoints: {
+    apis: ApiResult[];
+    findings: FindingResult[];
+    count: number;
+  };
+  exposures: {
+    secrets: SecretResult[];
+    findings: FindingResult[];
+    count: number;
+  };
+  scripts: {
+    assets: AssetResult[];
+    findings: FindingResult[];
+    count: number;
+  };
+}
+
 export interface AnalysisResult {
   success: true;
   url?: string;
@@ -63,6 +81,7 @@ export interface AnalysisResult {
   secrets: SecretResult[];
   risk: RiskResult[];
   findings: FindingResult[];
+  groups: FindingGroups;
 }
 
 export interface AnalysisError {

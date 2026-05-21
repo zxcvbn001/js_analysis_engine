@@ -25,6 +25,8 @@ const rules: PatternRule[] = [
 ];
 
 const lowRiskHtmlPattern = /<input\b[^>]*type=["']?password/i;
+const MAX_CANDIDATES = 300;
+const MAX_EVIDENCE_LINE_CHARS = 500;
 
 export function findSecretCandidates(ast: t.File, content?: string): SecretCandidate[] {
   const candidates: SecretCandidate[] = [];
@@ -32,6 +34,10 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
 
   traverseAst(ast, {
     VariableDeclarator(path) {
+      if (candidates.length >= MAX_CANDIDATES) {
+        path.stop();
+        return;
+      }
       const variableName = t.isIdentifier(path.node.id) ? path.node.id.name : undefined;
       if (!path.node.init) {
         return;
@@ -42,16 +48,28 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
       candidates.push(...matchCandidate(value, variableName, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
     ObjectProperty(path) {
+      if (candidates.length >= MAX_CANDIDATES) {
+        path.stop();
+        return;
+      }
       const variableName = propertyName(path.node.key);
       const value = literalValue(path.node.value);
       const line = path.node.loc?.start.line;
       candidates.push(...matchCandidate(value, variableName, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
     StringLiteral(path) {
+      if (candidates.length >= MAX_CANDIDATES) {
+        path.stop();
+        return;
+      }
       const line = path.node.loc?.start.line;
       candidates.push(...matchCandidate(path.node.value, undefined, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
     TemplateElement(path) {
+      if (candidates.length >= MAX_CANDIDATES) {
+        path.stop();
+        return;
+      }
       const value = path.node.value.cooked ?? path.node.value.raw;
       const line = path.node.loc?.start.line;
       candidates.push(...matchCandidate(value, undefined, line, path.node.loc?.start.column, contextAround(lines, line)));
@@ -162,6 +180,10 @@ function contextAround(lines: string[], line?: number, radius = 2): string | und
   const end = Math.min(lines.length, line + radius);
   return lines
     .slice(start - 1, end)
-    .map((text, index) => `${start + index}: ${text}`)
+    .map((text, index) => `${start + index}: ${trimLine(text)}`)
     .join('\n');
+}
+
+function trimLine(text: string): string {
+  return text.length > MAX_EVIDENCE_LINE_CHARS ? `${text.slice(0, MAX_EVIDENCE_LINE_CHARS)}... [truncated ${text.length - MAX_EVIDENCE_LINE_CHARS} chars]` : text;
 }

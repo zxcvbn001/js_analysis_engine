@@ -45,6 +45,10 @@ const callRules: FindingRule[] = [
   { category: '加密逻辑', type: 'crypto-call', severity: 'medium', confidence: 0.75, valuePattern: /\b(?:encrypt|decrypt|createCipher|createDecipher|CryptoJS|JSEncrypt|RSA|AES)\b/i },
 ];
 
+const MAX_FINDINGS = 1000;
+const MAX_EVIDENCE_LINE_CHARS = 500;
+const MAX_EVIDENCE_CHARS = 2500;
+
 export function analyzeFindings(input: {
   ast: t.File;
   content: string;
@@ -55,10 +59,16 @@ export function analyzeFindings(input: {
 }): FindingResult[] {
   const findings: FindingResult[] = [];
   const lines = input.content.split(/\r?\n/);
+  const pushFindings = (items: FindingResult[]): void => {
+    if (findings.length >= MAX_FINDINGS) {
+      return;
+    }
+    findings.push(...items.slice(0, MAX_FINDINGS - findings.length).map(normalizeFinding));
+  };
 
   for (const api of input.apis) {
     const apiEvidence = evidenceForApi(input.content, lines, api);
-    findings.push({
+    pushFindings([{
       category: 'API 信息',
       type: 'api-endpoint',
       value: api.resolvedUrl ?? api.url,
@@ -66,21 +76,21 @@ export function analyzeFindings(input: {
       confidence: api.confidence === 'high' ? 0.9 : api.confidence === 'medium' ? 0.7 : 0.5,
       source: 'api',
       evidence: apiEvidence ?? `${api.method ?? 'GET'} ${api.resolvedUrl ?? api.url}`,
-    });
-    findings.push(...matchRules(api.url, undefined, 'api', api.url));
+    }]);
+    pushFindings(matchRules(api.url, undefined, 'api', api.url));
     if (api.resolvedUrl) {
-      findings.push(...matchRules(api.resolvedUrl, undefined, 'api', api.resolvedUrl));
+      pushFindings(matchRules(api.resolvedUrl, undefined, 'api', api.resolvedUrl));
     }
     for (const param of api.params ?? []) {
-      findings.push(...matchRules(undefined, param, 'api', `${api.url}:${param}`));
+      pushFindings(matchRules(undefined, param, 'api', `${api.url}:${param}`));
     }
     for (const header of api.headers ?? []) {
-      findings.push(...matchRules(undefined, header, 'api', `${api.url}:${header}`));
+      pushFindings(matchRules(undefined, header, 'api', `${api.url}:${header}`));
     }
   }
 
   for (const asset of input.assets) {
-    findings.push({
+    pushFindings([{
       category: 'webpack模块',
       type: 'hidden-asset',
       value: asset.url,
@@ -88,12 +98,12 @@ export function analyzeFindings(input: {
       confidence: 0.85,
       source: 'asset',
       evidence: asset.source,
-    });
-    findings.push(...matchRules(asset.url, asset.chunkName, 'asset', asset.url));
+    }]);
+    pushFindings(matchRules(asset.url, asset.chunkName, 'asset', asset.url));
   }
 
   for (const secret of input.secrets) {
-    findings.push({
+    pushFindings([{
       category: categoryForSecret(secret.type),
       type: secret.type,
       value: secret.value,
@@ -101,55 +111,75 @@ export function analyzeFindings(input: {
       confidence: secret.confidence ?? 0.75,
       source: 'secret',
       evidence: secret.evidence,
-    });
+    }]);
   }
 
   for (const risk of input.risk) {
-    findings.push({
+    pushFindings([{
       category: categoryForRisk(risk.type),
       type: risk.type,
       severity: risk.severity,
       confidence: 0.7,
       source: 'risk',
       evidence: risk.evidence,
-    });
+    }]);
   }
 
   traverseAst(input.ast, {
     VariableDeclarator(path) {
+      if (findings.length >= MAX_FINDINGS) {
+        path.stop();
+        return;
+      }
       const name = t.isIdentifier(path.node.id) ? path.node.id.name : undefined;
       const value = literalText(path.node.init);
-      findings.push(...matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
+      pushFindings(matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
     },
     ObjectProperty(path) {
+      if (findings.length >= MAX_FINDINGS) {
+        path.stop();
+        return;
+      }
       const name = propertyName(path.node.key);
       const value = literalText(path.node.value);
-      findings.push(...matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
+      pushFindings(matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
     },
     StringLiteral(path) {
-      findings.push(...matchRules(path.node.value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? path.node.value));
+      if (findings.length >= MAX_FINDINGS) {
+        path.stop();
+        return;
+      }
+      pushFindings(matchRules(path.node.value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? path.node.value));
     },
     TemplateElement(path) {
+      if (findings.length >= MAX_FINDINGS) {
+        path.stop();
+        return;
+      }
       const value = path.node.value.cooked ?? path.node.value.raw;
-      findings.push(...matchRules(value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? value));
+      pushFindings(matchRules(value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? value));
     },
     CallExpression(path) {
+      if (findings.length >= MAX_FINDINGS) {
+        path.stop();
+        return;
+      }
       const name = calleeName(path.node.callee);
-      findings.push(...matchCallRules(name));
+      pushFindings(matchCallRules(name));
       if (isDynamicUrlCall(path.node)) {
-        findings.push({
+        pushFindings([{
           category: 'SSRF/RCE点',
           type: 'dynamic-url',
           severity: 'high',
           confidence: 0.65,
           source: 'call',
           evidence: contextAround(lines, path.node.loc?.start.line) ?? `call:${name}`,
-        });
+        }]);
       }
     },
   });
 
-  return uniqueBy(findings, (finding) => `${finding.category}:${finding.type}:${finding.value ?? ''}:${finding.evidence ?? ''}`);
+  return uniqueBy(findings, (finding) => `${finding.category}:${finding.type}:${finding.value ?? ''}:${finding.evidence ?? ''}`).slice(0, MAX_FINDINGS);
 }
 
 function matchRules(
@@ -286,8 +316,25 @@ function contextAround(lines: string[], line?: number, radius = 2): string | und
   const end = Math.min(lines.length, line + radius);
   return lines
     .slice(start - 1, end)
-    .map((text, index) => `${start + index}: ${text}`)
-    .join('\n');
+    .map((text, index) => `${start + index}: ${trimLine(text)}`)
+    .join('\n')
+    .slice(0, MAX_EVIDENCE_CHARS);
+}
+
+function normalizeFinding(finding: FindingResult): FindingResult {
+  return {
+    ...finding,
+    evidence: finding.evidence ? trimText(finding.evidence, MAX_EVIDENCE_CHARS) : finding.evidence,
+    value: finding.value ? trimText(finding.value, 1000) : finding.value,
+  };
+}
+
+function trimLine(text: string): string {
+  return text.length > MAX_EVIDENCE_LINE_CHARS ? `${text.slice(0, MAX_EVIDENCE_LINE_CHARS)}... [truncated ${text.length - MAX_EVIDENCE_LINE_CHARS} chars]` : text;
+}
+
+function trimText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}... [truncated ${text.length - max} chars]` : text;
 }
 
 function redact(value: string): string {

@@ -8,7 +8,8 @@ import { sha256 } from '../../utils/hash.js';
 import { fetchTextContent } from '../../utils/fetchContent.js';
 import { getConfig } from '../../config/appConfig.js';
 import { getAnalysisTask, submitAnalysisTask } from '../../engine/analyzers/analysisTaskStore.js';
-import { errorFields, logError } from '../../utils/logger.js';
+import { summarizeContent, summarizeMode } from '../../utils/analysisSummary.js';
+import { errorFields, logError, logInfo } from '../../utils/logger.js';
 
 const llmAnalyzer = new LLMSecretAnalyzer(createLLMProvider());
 
@@ -20,6 +21,14 @@ export async function analyzeJsController(request: FastifyRequest, reply: Fastif
   }
 
   const mode = parsed.data.fast_mode === true ? 'fast' : parsed.data.mode ?? 'full';
+  const hasContent = Boolean(parsed.data.content?.trim());
+  logInfo('analyze_js_request_received', {
+    url: parsed.data.url,
+    async: parsed.data.async === true,
+    hasContent,
+    inputContentLength: parsed.data.content?.length ?? 0,
+    ...summarizeMode(mode),
+  });
   if (parsed.data.async === true) {
     const task = submitAnalysisTask({
       url: parsed.data.url,
@@ -36,10 +45,19 @@ export async function analyzeJsController(request: FastifyRequest, reply: Fastif
   }
 
   let content: string;
+  let source: 'content' | 'download';
   try {
-    content = parsed.data.content?.trim()
-      ? parsed.data.content
-      : await fetchTextContent(parsed.data.url ?? '', getConfig().fetch);
+    if (parsed.data.content?.trim()) {
+      content = parsed.data.content;
+      source = 'content';
+    } else {
+      content = await fetchTextContent(parsed.data.url ?? '', getConfig().fetch);
+      source = 'download';
+    }
+    logInfo('analyze_js_content_prepared', {
+      url: parsed.data.url,
+      ...summarizeContent({ content, source, url: parsed.data.url }),
+    });
   } catch (error) {
     logError('analyze_js_prepare_failed', {
       url: parsed.data.url,

@@ -2,7 +2,8 @@ import type { ApiResult } from '../../types/results.js';
 import type { SecretCandidate, SecretContext } from '../../types/llm.js';
 
 const DEFAULT_RADIUS = 20;
-const MAX_CONTEXT_CHARS = 12000;
+const MAX_CONTEXT_CHARS = 4000;
+const MAX_LINE_CHARS = 500;
 
 export function extractSecretContext(content: string, candidate: SecretCandidate, apis: ApiResult[], radius = DEFAULT_RADIUS): SecretContext {
   const lines = content.split(/\r?\n/);
@@ -11,7 +12,7 @@ export function extractSecretContext(content: string, candidate: SecretCandidate
   const end = Math.min(lines.length, line + radius);
   const context = lines
     .slice(start - 1, end)
-    .map((text, index) => `${start + index}: ${text}`)
+    .map((text, index) => `${start + index}: ${trimLine(text)}`)
     .join('\n')
     .slice(0, MAX_CONTEXT_CHARS);
 
@@ -27,6 +28,10 @@ export function extractSecretContext(content: string, candidate: SecretCandidate
     nearbyApis,
     nearbyHeaders,
   };
+}
+
+function trimLine(text: string): string {
+  return text.length > MAX_LINE_CHARS ? `${text.slice(0, MAX_LINE_CHARS)}... [truncated ${text.length - MAX_LINE_CHARS} chars]` : text;
 }
 
 function inferFunctionName(lines: string[], line: number): string | undefined {

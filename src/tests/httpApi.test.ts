@@ -27,6 +27,7 @@ describe('http api', () => {
     expect(body.success).toBe(true);
     expect(body.apis[0].url).toBe('/api/user');
     expect(body.assets).toEqual([]);
+    expect(body.groups.endpoints.apis[0].url).toBe('/api/user');
     await app.close();
   });
 
@@ -89,6 +90,39 @@ describe('http api', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().apis[0].url).toBe('/from-content');
     expect(fetchMock).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('writes input and result summaries to file logs', async () => {
+    const app = await buildServer(testConfig({ logDir: 'tmp-test-logs' }));
+    const response = await app.inject({
+      method: 'POST',
+      url: '/analyze/js',
+      payload: {
+        url: 'https://example.com/app.js',
+        content: `
+          const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';
+          fetch('/api/log-summary', { method: 'POST' });
+        `,
+        fast_mode: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const logFile = join(process.cwd(), 'tmp-test-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('analyze_js_request_received');
+    expect(logText).toContain('analyze_js_content_prepared');
+    expect(logText).toContain('analyze_js_success');
+    expect(logText).toContain('contentLength');
+    expect(logText).toContain('sha256');
+    expect(logText).toContain('apiCount');
+    expect(logText).toContain('findingCategoryCounts');
+    expect(logText).toContain('endpointGroupCount');
+    expect(logText).toContain('exposureGroupCount');
+    expect(logText).toContain('scriptGroupCount');
+    expect(logText).toContain('llmCandidateCount');
 
     await app.close();
   });

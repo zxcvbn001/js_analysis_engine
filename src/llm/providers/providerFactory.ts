@@ -8,6 +8,9 @@ export function createLLMProvider(): LLMProvider | undefined {
     return undefined;
   }
   if (provider === 'deepseek') {
+    if (!getConfig().llm.apiKey.trim()) {
+      return undefined;
+    }
     return new DeepSeekProvider();
   }
   return undefined;

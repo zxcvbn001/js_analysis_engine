@@ -4,6 +4,7 @@ import type { AnalyzeMode } from '../../types/results.js';
 import { getConfig } from '../../config/appConfig.js';
 import { fetchTextContent } from '../../utils/fetchContent.js';
 import { analyzeJavaScript } from './javascriptAnalyzer.js';
+import { summarizeAnalysis, summarizeContent } from '../../utils/analysisSummary.js';
 import { logError, logInfo } from '../../utils/logger.js';
 
 interface SubmitTaskInput {
@@ -31,6 +32,7 @@ export function submitAnalysisTask(input: SubmitTaskInput): AnalysisTask {
     url: input.url,
     mode: input.mode,
     hasContent: Boolean(input.content?.trim()),
+    inputContentLength: input.content?.length ?? 0,
   });
 
   queueMicrotask(() => {
@@ -54,7 +56,13 @@ async function runTask(id: string, input: SubmitTaskInput): Promise<void> {
     url: input.url,
   });
 
-  const content = input.content?.trim() ? input.content : await fetchTextContent(input.url ?? '', getConfig().fetch);
+  const source = input.content?.trim() ? 'content' : 'download';
+  const content = source === 'content' ? input.content ?? '' : await fetchTextContent(input.url ?? '', getConfig().fetch);
+  logInfo('analysis_task_content_prepared', {
+    taskId: id,
+    url: input.url,
+    ...summarizeContent({ content, source, url: input.url }),
+  });
   const result = await analyzeJavaScript({ url: input.url, content, mode: input.mode });
 
   if (!result.success) {
@@ -80,6 +88,7 @@ async function runTask(id: string, input: SubmitTaskInput): Promise<void> {
     taskId: id,
     url: input.url,
     durationMs: Date.now() - startedAt,
+    ...summarizeAnalysis(result),
   });
 }
 

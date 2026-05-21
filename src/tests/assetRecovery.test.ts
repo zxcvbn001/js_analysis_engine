@@ -34,5 +34,7 @@ describe('asset recovery', () => {
         }),
       ]),
     );
+    expect(result.groups.scripts.assets).toHaveLength(2);
+    expect(result.groups.scripts.count).toBeGreaterThanOrEqual(2);
   });
 });

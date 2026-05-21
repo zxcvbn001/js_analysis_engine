@@ -29,12 +29,16 @@ export class LLMSecretAnalyzer {
     return result;
   }
 
-  enqueue(context: SecretContext): void {
+  isEnabled(): boolean {
+    return Boolean(this.provider);
+  }
+
+  enqueue(context: SecretContext): boolean {
     if (!this.provider) {
-      return;
+      return false;
     }
 
-    this.queue.enqueue(async () => {
+    return this.queue.enqueue(async () => {
       await this.analyzeNow(context);
     });
   }

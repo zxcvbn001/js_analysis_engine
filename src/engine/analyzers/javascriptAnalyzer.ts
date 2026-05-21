@@ -7,14 +7,16 @@ import { analyzeSecrets } from '../../extractors/secret/secretAnalyzer.js';
 import { extractAssets } from '../../extractors/assets/assetExtractor.js';
 import { enrichApisWithBaseUrl, extractBaseUrlCandidates } from '../../extractors/api/baseUrlExtractor.js';
 import { analyzeFindings } from '../../extractors/findings/findingAnalyzer.js';
+import { filterUnconfirmedSensitiveFindings, groupFindings } from '../../extractors/findings/findingGrouper.js';
 import { LLMSecretAnalyzer } from '../../llm/analyzers/llmSecretAnalyzer.js';
 import { createLLMProvider } from '../../llm/providers/providerFactory.js';
 import type { AnalysisResponse, AnalyzeMode } from '../../types/results.js';
+import { summarizeAnalysis } from '../../utils/analysisSummary.js';
 import { errorFields, logError, logInfo } from '../../utils/logger.js';
 
 const sharedLLMAnalyzer = new LLMSecretAnalyzer(createLLMProvider());
 
-export async function analyzeJavaScript(input: { url?: string; content: string; mode?: AnalyzeMode }): Promise<AnalysisResponse> {
+export async function analyzeJavaScript(input: { url?: string; content: string; mode?: AnalyzeMode; llmAnalyzer?: LLMSecretAnalyzer }): Promise<AnalysisResponse> {
   const startedAt = Date.now();
   try {
     logInfo('analyze_js_start', {
@@ -28,15 +30,27 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
     const apiExtraction = extractApis(ast, constants, wrappers);
     apiExtraction.apis = enrichApisWithBaseUrl(apiExtraction.apis, extractBaseUrlCandidates(ast, input.url));
     const assets = extractAssets(ast);
-    const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'full', sharedLLMAnalyzer);
+    const activeLLMAnalyzer = input.llmAnalyzer ?? sharedLLMAnalyzer;
+    const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'full', activeLLMAnalyzer);
     const risk = analyzeRisks(ast, apiExtraction.apis);
-    const findings = analyzeFindings({
+    const rawFindings = analyzeFindings({
       ast,
       content: input.content,
       apis: apiExtraction.apis,
       assets,
       secrets: secretExtraction.secrets,
       risk,
+    });
+    const findings = filterUnconfirmedSensitiveFindings({
+      findings: rawFindings,
+      secrets: secretExtraction.secrets,
+      requireConfirmedSecrets: (input.mode ?? 'full') === 'full' && secretExtraction.llm.enabled,
+    });
+    const groups = groupFindings({
+      apis: apiExtraction.apis,
+      assets,
+      secrets: secretExtraction.secrets,
+      findings,
     });
 
     const response: AnalysisResponse = {
@@ -49,16 +63,19 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       secrets: secretExtraction.secrets,
       risk,
       findings,
+      groups,
     };
     logInfo('analyze_js_success', {
       url: input.url,
       durationMs: Date.now() - startedAt,
-      apiCount: response.apis.length,
-      assetCount: response.assets.length,
-      paramCount: response.params.length,
-      secretCount: response.secrets.length,
-      riskCount: response.risk.length,
-      findingCount: response.findings.length,
+      ...summarizeAnalysis(response),
+      llmEnabled: secretExtraction.llm.enabled,
+      llmCandidateCount: secretExtraction.llm.candidateCount,
+      llmQueuedCount: secretExtraction.llm.queuedCount,
+      llmDroppedCount: secretExtraction.llm.droppedCount,
+      llmReviewedCount: secretExtraction.llm.reviewedCount,
+      llmConfirmedCount: secretExtraction.llm.confirmedCount,
+      llmRejectedCount: secretExtraction.llm.rejectedCount,
     });
     return response;
   } catch (error) {

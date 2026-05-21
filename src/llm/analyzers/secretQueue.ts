@@ -6,11 +6,16 @@ export class AsyncTaskQueue {
   constructor(
     private readonly concurrency = 1,
     private readonly minStartIntervalMs = 1000,
+    private readonly maxQueued = 120,
   ) {}
 
-  enqueue(task: () => Promise<void>): void {
+  enqueue(task: () => Promise<void>): boolean {
+    if (this.queue.length >= this.maxQueued) {
+      return false;
+    }
     this.queue.push(task);
     this.drain();
+    return true;
   }
 
   private drain(): void {
