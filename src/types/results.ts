@@ -43,6 +43,16 @@ export interface AssetResult {
   source?: string;
 }
 
+export interface FindingResult {
+  category: string;
+  type: string;
+  value?: string;
+  severity: Severity;
+  confidence: number;
+  source: 'api' | 'asset' | 'string' | 'identifier' | 'call' | 'secret' | 'risk';
+  evidence?: string;
+}
+
 export interface AnalysisResult {
   success: true;
   url?: string;
@@ -52,6 +62,7 @@ export interface AnalysisResult {
   auth: string[];
   secrets: SecretResult[];
   risk: RiskResult[];
+  findings: FindingResult[];
 }
 
 export interface AnalysisError {

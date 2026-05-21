@@ -10,7 +10,7 @@ export class LLMSecretAnalyzer {
 
   constructor(private readonly provider?: LLMProvider, cache?: SecretAnalysisCache, queue?: AsyncTaskQueue) {
     this.cache = cache ?? new SecretAnalysisCache();
-    this.queue = queue ?? new AsyncTaskQueue(2);
+    this.queue = queue ?? new AsyncTaskQueue(1, 1000);
   }
 
   async analyzeNow(context: SecretContext): Promise<LLMSecretResult | undefined> {

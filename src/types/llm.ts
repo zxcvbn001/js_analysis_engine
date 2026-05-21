@@ -9,6 +9,7 @@ export interface SecretCandidate {
   line?: number;
   column?: number;
   variableName?: string;
+  context?: string;
 }
 
 export interface SecretContext {

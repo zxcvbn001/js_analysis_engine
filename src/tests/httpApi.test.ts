@@ -93,6 +93,34 @@ describe('http api', () => {
     await app.close();
   });
 
+  it('uses full analysis mode by default unless fast mode is explicit', async () => {
+    const app = await buildServer(testConfig());
+    const defaultResponse = await app.inject({
+      method: 'POST',
+      url: '/analyze/js',
+      payload: {
+        content: "const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345'",
+      },
+    });
+
+    expect(defaultResponse.statusCode).toBe(200);
+    expect(defaultResponse.json().success).toBe(true);
+
+    const fastResponse = await app.inject({
+      method: 'POST',
+      url: '/analyze/js',
+      payload: {
+        content: "const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345'",
+        fast_mode: true,
+      },
+    });
+
+    expect(fastResponse.statusCode).toBe(200);
+    expect(fastResponse.json().success).toBe(true);
+
+    await app.close();
+  });
+
   it('submits async analysis tasks and returns results by id', async () => {
     const app = await buildServer(testConfig());
     const submitted = await app.inject({

@@ -107,4 +107,64 @@ describe('api recovery', () => {
       }),
     );
   });
+
+  it('recovers adjacent request factory calls with optional headers and flags', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        function s(e){return o()({url:"/getLoginVerifyCode",method:"post",hiddenLoading:!0,data:e})}
+        function l(e){return o()({url:"/user/changePassword",method:"post",headers:{"Content-Type":"application/json"},data:e})}
+        function c(e){return o()({url:"/permissionLog/getPermissionLogList",method:"post",headers:{"Content-Type":"application/json"},data:e})}
+      `,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.apis).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ url: '/getLoginVerifyCode', method: 'POST' }),
+        expect.objectContaining({ url: '/user/changePassword', method: 'POST', headers: ['Content-Type'] }),
+        expect.objectContaining({ url: '/permissionLog/getPermissionLogList', method: 'POST', headers: ['Content-Type'] }),
+      ]),
+    );
+  });
+
+  it('recovers APIs through the request call graph', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        const service = axios.create({ baseURL: '/api' });
+        function request(config) {
+          return service(config);
+        }
+        const relay = (config) => request(config);
+        function postJson(url, data, config) {
+          return service.post(url, data, config);
+        }
+        function getWithParams(url, params) {
+          return service.get(url, { params });
+        }
+        request({ url: '/graph/config', method: 'post', data: { uid: userId } });
+        relay({ url: '/graph/relay', method: 'delete' });
+        postJson('/graph/post', { name: userName }, { headers: { Authorization: token } });
+        getWithParams('/graph/list', { page: pageNo });
+      `,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.apis).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ url: '/graph/config', method: 'POST', source: 'request' }),
+        expect.objectContaining({ url: '/graph/relay', method: 'DELETE', source: 'relay' }),
+        expect.objectContaining({ url: '/graph/post', method: 'POST', source: 'postJson', headers: ['Authorization'] }),
+        expect.objectContaining({ url: '/graph/list', method: 'GET', source: 'getWithParams' }),
+      ]),
+    );
+    expect(result.params.map((param) => param.name)).toEqual(expect.arrayContaining(['uid', 'name', 'page', 'Authorization']));
+  });
 });

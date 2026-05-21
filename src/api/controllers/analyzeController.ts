@@ -19,7 +19,7 @@ export async function analyzeJsController(request: FastifyRequest, reply: Fastif
     return;
   }
 
-  const mode = parsed.data.fast_mode === true ? 'fast' : parsed.data.mode ?? 'fast';
+  const mode = parsed.data.fast_mode === true ? 'fast' : parsed.data.mode ?? 'full';
   if (parsed.data.async === true) {
     const task = submitAnalysisTask({
       url: parsed.data.url,

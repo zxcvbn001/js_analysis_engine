@@ -26,8 +26,9 @@ const rules: PatternRule[] = [
 
 const lowRiskHtmlPattern = /<input\b[^>]*type=["']?password/i;
 
-export function findSecretCandidates(ast: t.File): SecretCandidate[] {
+export function findSecretCandidates(ast: t.File, content?: string): SecretCandidate[] {
   const candidates: SecretCandidate[] = [];
+  const lines = content?.split(/\r?\n/) ?? [];
 
   traverseAst(ast, {
     VariableDeclarator(path) {
@@ -37,19 +38,23 @@ export function findSecretCandidates(ast: t.File): SecretCandidate[] {
       }
 
       const value = literalValue(path.node.init);
-      candidates.push(...matchCandidate(value, variableName, path.node.loc?.start.line, path.node.loc?.start.column));
+      const line = path.node.loc?.start.line;
+      candidates.push(...matchCandidate(value, variableName, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
     ObjectProperty(path) {
       const variableName = propertyName(path.node.key);
       const value = literalValue(path.node.value);
-      candidates.push(...matchCandidate(value, variableName, path.node.loc?.start.line, path.node.loc?.start.column));
+      const line = path.node.loc?.start.line;
+      candidates.push(...matchCandidate(value, variableName, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
     StringLiteral(path) {
-      candidates.push(...matchCandidate(path.node.value, undefined, path.node.loc?.start.line, path.node.loc?.start.column));
+      const line = path.node.loc?.start.line;
+      candidates.push(...matchCandidate(path.node.value, undefined, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
     TemplateElement(path) {
       const value = path.node.value.cooked ?? path.node.value.raw;
-      candidates.push(...matchCandidate(value, undefined, path.node.loc?.start.line, path.node.loc?.start.column));
+      const line = path.node.loc?.start.line;
+      candidates.push(...matchCandidate(value, undefined, line, path.node.loc?.start.column, contextAround(lines, line)));
     },
   });
 
@@ -63,14 +68,14 @@ export function findSecretCandidates(ast: t.File): SecretCandidate[] {
   });
 }
 
-function matchCandidate(value: string | undefined, variableName?: string, line?: number, column?: number): SecretCandidate[] {
+function matchCandidate(value: string | undefined, variableName?: string, line?: number, column?: number, context?: string): SecretCandidate[] {
   if (!value && !variableName) {
     return [];
   }
 
   const text = value ?? '';
   if (lowRiskHtmlPattern.test(text)) {
-    return [buildCandidate('html-password-input', 'low', text, 'Password input field, not a hardcoded credential.', line, column, variableName)];
+    return [buildCandidate('html-password-input', 'low', text, 'Password input field, not a hardcoded credential.', line, column, variableName, context)];
   }
 
   const matches: SecretCandidate[] = [];
@@ -86,7 +91,7 @@ function matchCandidate(value: string | undefined, variableName?: string, line?:
       continue;
     }
 
-    matches.push(buildCandidate(rule.type, rule.severity, text || (variableName ?? ''), `${variableName ?? 'literal'}=${redact(text)}`, line, column, variableName));
+    matches.push(buildCandidate(rule.type, rule.severity, text || (variableName ?? ''), `${variableName ?? 'literal'}=${redact(text)}`, line, column, variableName, context));
   }
 
   return matches;
@@ -100,6 +105,7 @@ function buildCandidate(
   line?: number,
   column?: number,
   variableName?: string,
+  context?: string,
 ): SecretCandidate {
   return {
     id: sha256(`${type}:${value}:${line ?? 0}:${column ?? 0}:${variableName ?? ''}`),
@@ -110,6 +116,7 @@ function buildCandidate(
     line,
     column,
     variableName,
+    context,
   };
 }
 
@@ -145,4 +152,16 @@ function redact(value: string | undefined): string {
 
 function isClearlyPlaceholder(value: string): boolean {
   return /^(xxx+|your[_-]?|example|changeme|password|token)$/i.test(value);
+}
+
+function contextAround(lines: string[], line?: number, radius = 2): string | undefined {
+  if (!line || lines.length === 0) {
+    return undefined;
+  }
+  const start = Math.max(1, line - radius);
+  const end = Math.min(lines.length, line + radius);
+  return lines
+    .slice(start - 1, end)
+    .map((text, index) => `${start + index}: ${text}`)
+    .join('\n');
 }

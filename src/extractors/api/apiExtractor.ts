@@ -1,7 +1,7 @@
 import * as t from '@babel/types';
 import type { ApiResult, ParamResult } from '../../types/results.js';
 import { calleeName, createStringResolver, memberName } from '../../engine/propagation/stringResolver.js';
-import type { WrapperRegistry } from '../../engine/wrapper/wrapperRegistry.js';
+import type { MethodForwarder, WrapperRegistry } from '../../engine/wrapper/wrapperRegistry.js';
 import {
   extractHeaders,
   extractJsonLikeStringParams,
@@ -95,6 +95,22 @@ function recoverCall(
 ): RecoveredCall | undefined {
   if (t.isIdentifier(node.callee) && node.callee.name === 'fetch') {
     return recoverFetch(node, resolver);
+  }
+
+  if (t.isIdentifier(node.callee)) {
+    const forwarder = wrappers.getForwarder(node.callee.name);
+    if (forwarder?.kind === 'config') {
+      const recovered = recoverRequestConfigCall(node, resolver, node.callee.name);
+      if (recovered) {
+        return recovered;
+      }
+    }
+    if (forwarder?.kind === 'method') {
+      const recovered = recoverForwardedMethodCall(node, resolver, forwarder, node.callee.name);
+      if (recovered) {
+        return recovered;
+      }
+    }
   }
 
   if (t.isCallExpression(node.callee)) {
@@ -297,6 +313,52 @@ function recoverMethodCall(
 
   return {
     result: { url, method, params: params.map((param) => param.name), headers, auth: auth[0], source },
+    params,
+    auth,
+  };
+}
+
+function recoverForwardedMethodCall(
+  node: t.CallExpression,
+  resolver: ReturnType<typeof createStringResolver>,
+  forwarder: MethodForwarder,
+  source: string,
+): RecoveredCall | undefined {
+  const urlNode = node.arguments[forwarder.urlArgIndex];
+  if (!urlNode || !t.isExpression(urlNode)) {
+    return undefined;
+  }
+
+  const url = resolver.resolve(urlNode).value;
+  if (!url || !isLikelyRequestUrl(url)) {
+    return undefined;
+  }
+
+  const bodyNode = forwarder.bodyArgIndex === undefined ? undefined : node.arguments[forwarder.bodyArgIndex];
+  const queryNode = forwarder.queryArgIndex === undefined ? undefined : node.arguments[forwarder.queryArgIndex];
+  const configNode = forwarder.configArgIndex === undefined ? undefined : node.arguments[forwarder.configArgIndex];
+  const headers = t.isObjectExpression(configNode) ? extractHeaders(configNode, url) : [];
+  const params = [
+    ...extractPathParams(url, url),
+    ...extractQueryParams(url, url),
+    ...resolveUrlParams(urlNode, resolver, url),
+    ...(t.isObjectExpression(bodyNode) ? extractObjectParams(bodyNode, 'body', url) : []),
+    ...extractJsonLikeStringParams(bodyNode, 'body', url),
+    ...extractValueParam(bodyNode, 'body', url),
+    ...(t.isObjectExpression(queryNode) ? extractObjectParams(queryNode, 'query', url) : []),
+    ...(t.isObjectExpression(configNode) ? extractParamsFromConfig(configNode, url) : []),
+  ];
+  const auth = extractAuthSignals(headers, [url, ...headers]);
+
+  return {
+    result: {
+      url,
+      method: forwarder.method,
+      params: params.map((param) => param.name),
+      headers,
+      auth: auth[0],
+      source,
+    },
     params,
     auth,
   };

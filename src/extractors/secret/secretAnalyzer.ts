@@ -18,7 +18,7 @@ export async function analyzeSecrets(
   mode: AnalyzeMode,
   llmAnalyzer?: LLMSecretAnalyzer,
 ): Promise<SecretAnalysisOutput> {
-  const candidates = findSecretCandidates(ast);
+  const candidates = findSecretCandidates(ast, content);
   const contexts = candidates.map((candidate) => extractSecretContext(content, candidate, apis));
   const secrets: SecretResult[] = [];
 
@@ -29,7 +29,7 @@ export async function analyzeSecrets(
       severity: context.candidate.severity,
       confidence: context.candidate.type === 'html-password-input' ? 0.35 : 0.75,
       source: 'regex',
-      evidence: context.candidate.evidence,
+      evidence: context.candidate.context ?? context.candidate.evidence,
     };
 
     if (mode === 'full' && llmAnalyzer) {

@@ -6,6 +6,7 @@ import { analyzeRisks } from '../../extractors/risk/riskAnalyzer.js';
 import { analyzeSecrets } from '../../extractors/secret/secretAnalyzer.js';
 import { extractAssets } from '../../extractors/assets/assetExtractor.js';
 import { enrichApisWithBaseUrl, extractBaseUrlCandidates } from '../../extractors/api/baseUrlExtractor.js';
+import { analyzeFindings } from '../../extractors/findings/findingAnalyzer.js';
 import { LLMSecretAnalyzer } from '../../llm/analyzers/llmSecretAnalyzer.js';
 import { createLLMProvider } from '../../llm/providers/providerFactory.js';
 import type { AnalysisResponse, AnalyzeMode } from '../../types/results.js';
@@ -18,7 +19,7 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
   try {
     logInfo('analyze_js_start', {
       url: input.url,
-      mode: input.mode ?? 'fast',
+      mode: input.mode ?? 'full',
       contentLength: input.content.length,
     });
     const ast = parseJavaScript(input.content);
@@ -27,8 +28,16 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
     const apiExtraction = extractApis(ast, constants, wrappers);
     apiExtraction.apis = enrichApisWithBaseUrl(apiExtraction.apis, extractBaseUrlCandidates(ast, input.url));
     const assets = extractAssets(ast);
-    const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'fast', sharedLLMAnalyzer);
+    const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'full', sharedLLMAnalyzer);
     const risk = analyzeRisks(ast, apiExtraction.apis);
+    const findings = analyzeFindings({
+      ast,
+      content: input.content,
+      apis: apiExtraction.apis,
+      assets,
+      secrets: secretExtraction.secrets,
+      risk,
+    });
 
     const response: AnalysisResponse = {
       success: true,
@@ -39,6 +48,7 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       auth: apiExtraction.auth,
       secrets: secretExtraction.secrets,
       risk,
+      findings,
     };
     logInfo('analyze_js_success', {
       url: input.url,
@@ -48,6 +58,7 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       paramCount: response.params.length,
       secretCount: response.secrets.length,
       riskCount: response.risk.length,
+      findingCount: response.findings.length,
     });
     return response;
   } catch (error) {

@@ -16,6 +16,7 @@ JavaScript Analysis Engine 是一个 JavaScript 攻击面分析工具。
 - 提取 Query、Body、Path、Header 参数。
 - 识别认证相关信号，例如 `Authorization`、`Bearer`、`JWT`、`X-Token`。
 - 检测上下文相关的 Secret 候选，例如 JWT、AWS Key、Firebase、SMTP、OSS、内网 URL、Debug Endpoint、测试环境 URL。
+- 输出统一 `findings` 分类结果，覆盖敏感凭据、API 信息、权限信息、云配置、第三方配置、调试信息、内网信息、业务敏感、加密逻辑、SSRF/RCE 点、JWT/OAuth、GraphQL、webpack 模块和敏感路由。
 - 从 API 路径、函数名、变量名、调用名中提取轻量风险提示。
 - 支持同步分析和异步任务分析。
 - 支持生产环境 API Key 鉴权。
@@ -281,13 +282,16 @@ JavaScript 分析成功时返回：
   "params": [],
   "auth": [],
   "secrets": [],
-  "risk": []
+  "risk": [],
+  "findings": []
 }
 ```
 
 `apis[].url` 是从 JavaScript 中恢复出的原始路径，可能是 `/login` 这种相对路径。
 
 `apis[].resolvedUrl` 是引擎能静态恢复运行时 `baseUrl` 时拼出的完整 URL。Burp 对接时应优先使用 `resolvedUrl` 做验证和重放；如果没有该字段，再由 Burp 按页面 URL 或脚本 URL 自行解析相对路径。
+
+`findings` 是面向展示和筛选的统一发现项列表，字段包括 `category`、`type`、`value`、`severity`、`confidence`、`source` 和 `evidence`。
 
 错误响应：
 
@@ -306,11 +310,11 @@ LLM 是可选能力，并且只用于 Secret 候选确认。
 
 当前行为：
 
-- `/analyze/js` + `fast_mode=true`：不调用 LLM。
-- `/analyze/js` + `mode="full"`：Secret 候选会进入后台 LLM 队列做增强确认，主分析仍优先返回规则结果。
+- `/analyze/js` + `fast_mode=true` 或 `mode="fast"`：不调用 LLM。
+- `/analyze/js` 不传模式或 `mode="full"`：默认 full，Secret 候选会进入后台 LLM 队列做增强确认，主分析仍优先返回规则结果。
 - `/analyze/secret`：对单个 candidate + context 调用 LLM 确认。
 
-引擎不会把完整 JavaScript Bundle 发送给 LLM。
+LLM 队列限速为 60/min，即每秒最多启动 1 个 LLM 分析任务。引擎不会把完整 JavaScript Bundle 发送给 LLM。
 
 ## 日志
 
