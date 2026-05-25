@@ -5,6 +5,7 @@ export interface ApiResult {
   url: string;
   resolvedUrl?: string;
   baseUrl?: string;
+  kind?: 'api' | 'asset' | 'unknown';
   method?: string;
   params?: string[];
   headers?: string[];

@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { LLMSecretAnalyzer } from '../llm/analyzers/llmSecretAnalyzer.js';
 import { AsyncTaskQueue } from '../llm/analyzers/secretQueue.js';
 import type { LLMProvider, SecretContext } from '../types/llm.js';
+import { configureFileLogger } from '../utils/logger.js';
 
 describe('llm queue', () => {
   it('rate limits queued LLM jobs to 60 per minute', async () => {
+    configureFileLogger({ fileEnabled: false, directory: 'logs', level: 'info' });
     vi.useFakeTimers();
     const startedAt: number[] = [];
     const provider: LLMProvider = {
@@ -49,5 +51,6 @@ describe('llm queue', () => {
     expect(startedAt[2] - startedAt[1]).toBeGreaterThanOrEqual(1000);
 
     vi.useRealTimers();
+    configureFileLogger({ fileEnabled: false, directory: 'logs', level: 'info' });
   });
 });

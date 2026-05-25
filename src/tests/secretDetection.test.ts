@@ -1,9 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { configureFileLogger } from '../utils/logger.js';
 import { analyzeJavaScript } from '../engine/analyzers/javascriptAnalyzer.js';
 import { LLMSecretAnalyzer } from '../llm/analyzers/llmSecretAnalyzer.js';
 import type { LLMProvider } from '../types/llm.js';
 
 describe('secret detection', () => {
+  afterEach(() => {
+    configureFileLogger({ fileEnabled: false, directory: 'logs', level: 'info' });
+    rmSync(join(process.cwd(), 'tmp-test-llm-logs'), { recursive: true, force: true });
+  });
+
   it('detects contextual secret candidates without regex-only output', async () => {
     const result = await analyzeJavaScript({
       content: `
@@ -130,6 +138,33 @@ describe('secret detection', () => {
     expect(result.groups.scripts.findings.every((finding) => finding.category === 'webpack模块' || finding.source === 'asset')).toBe(true);
   });
 
+  it('prioritizes high severity findings and deduplicates noisy results', async () => {
+    const repeated = Array.from({ length: 250 }, (_, index) => `const adminPath${index} = '/admin/panel';`).join('\n');
+    const result = await analyzeJavaScript({
+      content: `
+        ${repeated}
+        const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';
+        const aws = 'AKIA1234567890ABCDEF';
+        eval(window.name);
+        fetch('/api/critical/deleteUser');
+      `,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.findings.length).toBeLessThanOrEqual(1000);
+    expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'command-execution')).toBe(true);
+    expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'token')).toBe(true);
+    expect(result.findings.some((finding) => finding.type === 'access-key')).toBe(true);
+
+    const adminRouteFindings = result.findings.filter((finding) => finding.type === 'sensitive-route' && finding.value === '/admin/panel');
+    expect(adminRouteFindings.length).toBeLessThan(20);
+  });
+
   it('filters sensitive findings to LLM-confirmed results in full mode', async () => {
     const batchSizes: number[] = [];
     const provider: LLMProvider = {
@@ -232,5 +267,42 @@ describe('secret detection', () => {
     expect(result.meta.analysis.llm.reviewedCount).toBe(23);
     expect(result.meta.analysis.llm.rejectedCount).toBe(23);
     expect(result.meta.analysis.llm.batchCount).toBe(3);
+  });
+
+  it('writes detailed LLM review logs in full mode', async () => {
+    configureFileLogger({ fileEnabled: true, directory: 'tmp-test-llm-logs', level: 'info' });
+    const provider: LLMProvider = {
+      async analyzeSecret() {
+        throw new Error('single candidate path should not be used');
+      },
+      async analyzeSecretsBatch(input) {
+        return input.map((context) => ({
+          id: context.candidate.id,
+          is_secret: true,
+          secret_type: context.candidate.type,
+          severity: 'high' as const,
+          confidence: 0.9,
+          reason: 'confirmed by test provider',
+        }));
+      },
+    };
+
+    const result = await analyzeJavaScript({
+      content: "const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';",
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer(provider),
+    });
+
+    expect(result.success).toBe(true);
+    const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('llm_secret_analysis_decision');
+    expect(logText).toContain('llm_secret_batch_start');
+    expect(logText).toContain('llm_secret_batch_call_start');
+    expect(logText).toContain('llm_secret_batch_call_completed');
+    expect(logText).toContain('llm_secret_candidate_reviewed');
+    expect(logText).toContain('llm_secret_batch_completed');
+    expect(logText).toContain('candidateId');
+    expect(logText).toContain('contextLength');
   });
 });

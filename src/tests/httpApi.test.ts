@@ -212,6 +212,39 @@ describe('http api', () => {
     await app.close();
   });
 
+  it('returns fallback results and parse diagnostics when downloaded content is not parseable JavaScript', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<!doctype html><html><body>requestConfig: { url: "/fallback/api", method: "post" }</body></html>', {
+        status: 200,
+        headers: {
+          'content-type': 'text/html',
+        },
+      }),
+    );
+
+    const app = await buildServer(testConfig({ logDir: 'tmp-test-logs' }));
+    const response = await app.inject({
+      method: 'POST',
+      url: '/analyze/js',
+      payload: {
+        url: 'http://example.com/assets/global/scripts/app.min.js',
+        fast_mode: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().success).toBe(true);
+    expect(response.json().apis).toEqual(expect.arrayContaining([expect.objectContaining({ url: '/fallback/api' })]));
+
+    const logFile = join(process.cwd(), 'tmp-test-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('analyze_js_parse_failed');
+    expect(logText).toContain('analyze_js_text_fallback_completed');
+    expect(logText).toContain('looksLikeHtml');
+
+    await app.close();
+  });
+
   it('requires an API key when auth is enabled', async () => {
     const app = await buildServer(testConfig({ authEnabled: true }));
 

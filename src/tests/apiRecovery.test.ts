@@ -167,4 +167,97 @@ describe('api recovery', () => {
     );
     expect(result.params.map((param) => param.name)).toEqual(expect.arrayContaining(['uid', 'name', 'page', 'Authorization']));
   });
+
+  it('recovers APIs from returned url helpers and config factories', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        function getPath() {
+          return '/returned/path';
+        }
+        function buildConfig(data) {
+          return {
+            url: getPath(),
+            method: 'post',
+            data,
+            headers: { Authorization: token }
+          };
+        }
+        function callApi(data) {
+          return request(buildConfig(data));
+        }
+        const request = (config) => axios(config);
+        callApi(payload);
+      `,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.apis).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          url: '/returned/path',
+          method: 'POST',
+          source: 'request',
+          headers: ['Authorization'],
+          kind: 'api',
+        }),
+      ]),
+    );
+    expect(result.params.map((param) => param.name)).toEqual(expect.arrayContaining(['data', 'Authorization']));
+  });
+
+  it('filters static resources out of recovered apis', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        fetch('/favicon.ico');
+        axios.get('/static/logo.png');
+        axios.get('/fonts/roboto.woff2');
+        fetch('/manifest.json');
+        axios.get('/api/real-user');
+        request({ url: '/user/profile', method: 'get' });
+        function request(config) { return axios(config); }
+      `,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.apis.map((api) => api.url)).toEqual(expect.arrayContaining(['/api/real-user', '/user/profile']));
+    expect(result.apis.map((api) => api.url)).not.toEqual(expect.arrayContaining(['/favicon.ico', '/static/logo.png', '/fonts/roboto.woff2', '/manifest.json']));
+    expect(result.apis.every((api) => api.kind === 'api')).toBe(true);
+  });
+
+  it('falls back to text recovery when JavaScript parsing fails', async () => {
+    const result = await analyzeJavaScript({
+      url: 'http://example.com/assets/global/scripts/app.min.js',
+      content: `
+        <!doctype html>
+        <html>
+          <body>
+            requestConfig: { url: "/Main/LoginVal", type: "post", data:'{"fusername":"admin","fpwd":"pass123456"}' }
+            preload: "/assets/app.chunk.js"
+          </body>
+        </html>
+      `,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.apis).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ url: '/Main/LoginVal', method: 'POST', source: 'text:config-url' }),
+      ]),
+    );
+    expect(result.assets).toEqual(expect.arrayContaining([expect.objectContaining({ url: '/assets/app.chunk.js' })]));
+    expect(result.params.map((param) => param.name)).toEqual(expect.arrayContaining(['fusername', 'fpwd']));
+  });
 });

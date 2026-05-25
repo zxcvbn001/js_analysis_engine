@@ -46,6 +46,8 @@ const callRules: FindingRule[] = [
 ];
 
 const MAX_FINDINGS = 1000;
+const MAX_FINDINGS_PER_TYPE = 80;
+const MAX_FINDINGS_PER_CATEGORY = 200;
 const MAX_EVIDENCE_LINE_CHARS = 500;
 const MAX_EVIDENCE_CHARS = 2500;
 
@@ -60,10 +62,7 @@ export function analyzeFindings(input: {
   const findings: FindingResult[] = [];
   const lines = input.content.split(/\r?\n/);
   const pushFindings = (items: FindingResult[]): void => {
-    if (findings.length >= MAX_FINDINGS) {
-      return;
-    }
-    findings.push(...items.slice(0, MAX_FINDINGS - findings.length).map(normalizeFinding));
+    findings.push(...items.map(normalizeFinding));
   };
 
   for (const api of input.apis) {
@@ -127,7 +126,7 @@ export function analyzeFindings(input: {
 
   traverseAst(input.ast, {
     VariableDeclarator(path) {
-      if (findings.length >= MAX_FINDINGS) {
+      if (findings.length >= MAX_FINDINGS * 3) {
         path.stop();
         return;
       }
@@ -136,7 +135,7 @@ export function analyzeFindings(input: {
       pushFindings(matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
     },
     ObjectProperty(path) {
-      if (findings.length >= MAX_FINDINGS) {
+      if (findings.length >= MAX_FINDINGS * 3) {
         path.stop();
         return;
       }
@@ -145,14 +144,14 @@ export function analyzeFindings(input: {
       pushFindings(matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
     },
     StringLiteral(path) {
-      if (findings.length >= MAX_FINDINGS) {
+      if (findings.length >= MAX_FINDINGS * 3) {
         path.stop();
         return;
       }
       pushFindings(matchRules(path.node.value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? path.node.value));
     },
     TemplateElement(path) {
-      if (findings.length >= MAX_FINDINGS) {
+      if (findings.length >= MAX_FINDINGS * 3) {
         path.stop();
         return;
       }
@@ -160,7 +159,7 @@ export function analyzeFindings(input: {
       pushFindings(matchRules(value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? value));
     },
     CallExpression(path) {
-      if (findings.length >= MAX_FINDINGS) {
+      if (findings.length >= MAX_FINDINGS * 3) {
         path.stop();
         return;
       }
@@ -179,7 +178,7 @@ export function analyzeFindings(input: {
     },
   });
 
-  return uniqueBy(findings, (finding) => `${finding.category}:${finding.type}:${finding.value ?? ''}:${finding.evidence ?? ''}`).slice(0, MAX_FINDINGS);
+  return limitFindings(findings);
 }
 
 function matchRules(
@@ -327,6 +326,110 @@ function normalizeFinding(finding: FindingResult): FindingResult {
     evidence: finding.evidence ? trimText(finding.evidence, MAX_EVIDENCE_CHARS) : finding.evidence,
     value: finding.value ? trimText(finding.value, 1000) : finding.value,
   };
+}
+
+function limitFindings(findings: FindingResult[]): FindingResult[] {
+  const deduped = uniqueBy(findings, findingIdentity);
+  const sorted = deduped.sort(compareFindings);
+  const accepted: FindingResult[] = [];
+  const perType = new Map<string, number>();
+  const perCategory = new Map<string, number>();
+
+  for (const finding of sorted) {
+    if (accepted.length >= MAX_FINDINGS) {
+      break;
+    }
+
+    const typeKey = `${finding.category}:${finding.type}`;
+    const typeCount = perType.get(typeKey) ?? 0;
+    if (typeCount >= MAX_FINDINGS_PER_TYPE) {
+      continue;
+    }
+
+    const categoryCount = perCategory.get(finding.category) ?? 0;
+    if (categoryCount >= MAX_FINDINGS_PER_CATEGORY) {
+      continue;
+    }
+
+    accepted.push(finding);
+    perType.set(typeKey, typeCount + 1);
+    perCategory.set(finding.category, categoryCount + 1);
+  }
+
+  return accepted;
+}
+
+function findingIdentity(finding: FindingResult): string {
+  const value = normalizeValue(finding.value);
+  const evidence = normalizeEvidence(finding.evidence);
+  if (finding.source === 'identifier' || finding.source === 'string') {
+    return `${finding.category}:${finding.type}:${finding.source}:${value}`;
+  }
+  return `${finding.category}:${finding.type}:${finding.source}:${value}:${evidence}`;
+}
+
+function compareFindings(left: FindingResult, right: FindingResult): number {
+  const severityDiff = severityScore(right.severity) - severityScore(left.severity);
+  if (severityDiff !== 0) {
+    return severityDiff;
+  }
+
+  const confidenceDiff = right.confidence - left.confidence;
+  if (confidenceDiff !== 0) {
+    return confidenceDiff;
+  }
+
+  const sourceDiff = sourcePriority(left.source) - sourcePriority(right.source);
+  if (sourceDiff !== 0) {
+    return sourceDiff;
+  }
+
+  return (left.value ?? '').localeCompare(right.value ?? '');
+}
+
+function severityScore(severity: Severity): number {
+  if (severity === 'high') {
+    return 3;
+  }
+  if (severity === 'medium') {
+    return 2;
+  }
+  return 1;
+}
+
+function sourcePriority(source: FindingResult['source']): number {
+  switch (source) {
+    case 'secret':
+      return 6;
+    case 'api':
+      return 5;
+    case 'risk':
+      return 4;
+    case 'call':
+      return 3;
+    case 'identifier':
+      return 2;
+    case 'string':
+      return 1;
+    case 'asset':
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+function normalizeEvidence(value?: string): string {
+  if (!value) {
+    return '';
+  }
+  return value.replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+
+function normalizeValue(value?: string): string {
+  if (!value) {
+    return '';
+  }
+  return value.trim().slice(0, 220);
 }
 
 function trimLine(text: string): string {

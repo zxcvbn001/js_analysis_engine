@@ -86,6 +86,42 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
   });
 }
 
+export function findSecretCandidatesInText(content: string): SecretCandidate[] {
+  const candidates: SecretCandidate[] = [];
+  const lines = content.split(/\r?\n/);
+
+  for (let index = 0; index < lines.length && candidates.length < MAX_CANDIDATES; index += 1) {
+    const line = lines[index] ?? '';
+    if (!hasSecretSignal(line)) {
+      continue;
+    }
+
+    const lineNumber = index + 1;
+    for (const { name, value } of extractAssignments(line)) {
+      candidates.push(...matchCandidate(value, name, lineNumber, Math.max(0, line.indexOf(name ?? value ?? '')), contextAround(lines, lineNumber)));
+      if (candidates.length >= MAX_CANDIDATES) {
+        break;
+      }
+    }
+
+    for (const value of extractSecretLikeValues(line)) {
+      candidates.push(...matchCandidate(value, undefined, lineNumber, Math.max(0, line.indexOf(value)), contextAround(lines, lineNumber)));
+      if (candidates.length >= MAX_CANDIDATES) {
+        break;
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.id)) {
+      return false;
+    }
+    seen.add(candidate.id);
+    return true;
+  });
+}
+
 function matchCandidate(value: string | undefined, variableName?: string, line?: number, column?: number, context?: string): SecretCandidate[] {
   if (!value && !variableName) {
     return [];
@@ -170,6 +206,39 @@ function redact(value: string | undefined): string {
 
 function isClearlyPlaceholder(value: string): boolean {
   return /^(xxx+|your[_-]?|example|changeme|password|token)$/i.test(value);
+}
+
+function hasSecretSignal(value: string): boolean {
+  return /secret|token|password|passwd|api[_-]?key|access[_-]?key|AKIA|ASIA|Bearer\s+|eyJ|firebase|aliyun|oss-|smtp\.|localhost|127\.0\.0\.1|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|10\./i.test(value);
+}
+
+function extractAssignments(line: string): Array<{ name?: string; value?: string }> {
+  const assignments: Array<{ name?: string; value?: string }> = [];
+  for (const match of line.matchAll(/["']?([A-Za-z_$][\w$.-]{1,100})["']?\s*[:=]\s*(["'`])([^"'`]{0,500})\2/g)) {
+    assignments.push({ name: match[1], value: match[3] });
+  }
+  return assignments;
+}
+
+function extractSecretLikeValues(line: string): string[] {
+  const values = new Set<string>();
+  const patterns = [
+    /AKIA[0-9A-Z]{16}/g,
+    /ASIA[0-9A-Z]{16}/g,
+    /Bearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
+    /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+    /https?:\/\/(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|127\.0\.0\.1|localhost)[^"'`\s)]*/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of line.matchAll(pattern)) {
+      if (match[0]) {
+        values.add(match[0]);
+      }
+    }
+  }
+
+  return [...values];
 }
 
 function contextAround(lines: string[], line?: number, radius = 2): string | undefined {

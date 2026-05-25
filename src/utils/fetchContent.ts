@@ -24,6 +24,7 @@ export async function fetchTextContent(url: string, options: FetchContentOptions
         Accept: 'application/javascript,text/javascript,text/plain,*/*',
       },
     });
+    const contentType = response.headers.get('content-type') ?? undefined;
 
     if (!response.ok) {
       throw new Error(`Failed to download JS from ${url}: HTTP ${response.status}`);
@@ -38,6 +39,8 @@ export async function fetchTextContent(url: string, options: FetchContentOptions
       const text = await response.text();
       logInfo('download_js_success', {
         url,
+        status: response.status,
+        contentType,
         bytes: Buffer.byteLength(text, 'utf8'),
         durationMs: Date.now() - startedAt,
       });
@@ -72,6 +75,8 @@ export async function fetchTextContent(url: string, options: FetchContentOptions
     const text = new TextDecoder('utf-8', { fatal: false }).decode(merged);
     logInfo('download_js_success', {
       url,
+      status: response.status,
+      contentType,
       bytes: totalBytes,
       durationMs: Date.now() - startedAt,
     });

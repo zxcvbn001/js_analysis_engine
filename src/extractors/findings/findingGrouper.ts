@@ -41,6 +41,7 @@ export function groupFindings(input: {
   secrets: SecretResult[];
   findings: FindingResult[];
 }): FindingGroups {
+  const endpointApis = input.apis.filter((api) => (api.kind ?? 'api') === 'api');
   const endpointFindings = input.findings.filter((finding) => finding.source === 'api' || finding.category === 'API 信息');
   const scriptFindings = input.findings.filter((finding) => finding.source === 'asset' || finding.category === 'webpack模块');
   const endpointSet = new Set(endpointFindings);
@@ -61,9 +62,9 @@ export function groupFindings(input: {
 
   return {
     endpoints: {
-      apis: input.apis,
+      apis: endpointApis,
       findings: endpointFindings,
-      count: input.apis.length + endpointFindings.length,
+      count: endpointApis.length + endpointFindings.length,
     },
     exposures: {
       secrets: input.secrets,

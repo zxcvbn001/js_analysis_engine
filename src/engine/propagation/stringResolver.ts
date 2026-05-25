@@ -1,4 +1,5 @@
 import * as t from '@babel/types';
+import type { FunctionRegistry } from '../callgraph/functionRegistry.js';
 import { traverseAst } from '../traverser/traverseAst.js';
 
 export interface StringResolution {
@@ -8,12 +9,13 @@ export interface StringResolution {
 
 export interface StringResolver {
   resolve(node: t.Node | null | undefined): StringResolution;
+  inlineCall(node: t.CallExpression): t.Expression | undefined;
   constants: Map<string, string>;
 }
 
 const MAX_STRING_LENGTH = 4096;
 
-export function createStringResolver(constants: Map<string, string>): StringResolver {
+export function createStringResolver(constants: Map<string, string>, functionRegistry?: FunctionRegistry): StringResolver {
   const resolve = (node: t.Node | null | undefined, depth = 0): StringResolution => {
     if (!node || depth > 20) {
       return { params: [] };
@@ -74,6 +76,10 @@ export function createStringResolver(constants: Map<string, string>): StringReso
     }
 
     if (t.isCallExpression(node)) {
+      const inlined = functionRegistry?.inlineCall(node);
+      if (inlined) {
+        return resolve(inlined, depth + 1);
+      }
       return { params: [calleeName(node.callee)] };
     }
 
@@ -82,11 +88,12 @@ export function createStringResolver(constants: Map<string, string>): StringReso
 
   return {
     resolve: (node) => resolve(node),
+    inlineCall: (node) => functionRegistry?.inlineCall(node),
     constants,
   };
 }
 
-export function collectStringConstants(program: t.File): Map<string, string> {
+export function collectStringConstants(program: t.File, functionRegistry?: FunctionRegistry): Map<string, string> {
   const constants = new Map<string, string>();
   let changed = true;
   let rounds = 0;
@@ -94,7 +101,7 @@ export function collectStringConstants(program: t.File): Map<string, string> {
   while (changed && rounds < 5) {
     changed = false;
     rounds += 1;
-    const resolver = createStringResolver(constants);
+    const resolver = createStringResolver(constants, functionRegistry);
 
     traverseAst(program, {
       VariableDeclarator(path) {

@@ -1,5 +1,6 @@
 import * as t from '@babel/types';
 import type { ApiResult, ParamResult } from '../../types/results.js';
+import type { FunctionRegistry } from '../../engine/callgraph/functionRegistry.js';
 import { calleeName, createStringResolver, memberName } from '../../engine/propagation/stringResolver.js';
 import type { MethodForwarder, WrapperRegistry } from '../../engine/wrapper/wrapperRegistry.js';
 import {
@@ -24,8 +25,8 @@ export interface ApiExtraction {
 
 const httpMethods = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
-export function extractApis(ast: t.File, constants: Map<string, string>, wrappers: WrapperRegistry): ApiExtraction {
-  const resolver = createStringResolver(constants);
+export function extractApis(ast: t.File, constants: Map<string, string>, wrappers: WrapperRegistry, functionRegistry?: FunctionRegistry): ApiExtraction {
+  const resolver = createStringResolver(constants, functionRegistry);
   const apis: ApiResult[] = [];
   const params: ParamResult[] = [];
   const xhrHeaders = new Map<string, string[]>();
@@ -61,9 +62,14 @@ export function extractApis(ast: t.File, constants: Map<string, string>, wrapper
         api.result.headers = uniqueBy([...(api.result.headers ?? []), ...headers], (header) => header);
       }
 
-      apis.push(api.result);
+      const classified = classifyRecoveredApi(api.result);
+      if (classified.kind !== 'api') {
+        return;
+      }
+
+      apis.push(classified);
       if (api.xhrInstance) {
-        xhrOpenApis.set(api.xhrInstance, api.result);
+        xhrOpenApis.set(api.xhrInstance, classified);
       }
       params.push(...api.params);
       for (const signal of api.auth) {
@@ -369,8 +375,13 @@ function recoverRequestConfigCall(
   resolver: ReturnType<typeof createStringResolver>,
   source: string,
 ): RecoveredCall | undefined {
-  const config = node.arguments[0];
-  if (!config || !t.isObjectExpression(config)) {
+  const configNode = node.arguments[0];
+  if (!configNode || !t.isExpression(configNode)) {
+    return undefined;
+  }
+
+  const config = resolveObjectExpression(configNode, resolver);
+  if (!config) {
     return undefined;
   }
 
@@ -495,6 +506,88 @@ function isLikelyRequestUrl(url: string): boolean {
     return trimmed.startsWith('/') || /^https?:/i.test(trimmed);
   }
   return false;
+}
+
+function classifyRecoveredApi(api: ApiResult): ApiResult {
+  const candidate = api.resolvedUrl ?? api.url;
+  const kind = classifyUrl(candidate);
+  return {
+    ...api,
+    kind,
+    confidence: api.confidence ?? confidenceForKind(kind, candidate),
+  };
+}
+
+function classifyUrl(url: string): ApiResult['kind'] {
+  const normalized = url.split('?')[0]?.toLowerCase() ?? '';
+
+  if (
+    normalized === '/favicon.ico'
+    || normalized === '/manifest.json'
+    || normalized.startsWith('/static/')
+    || normalized.startsWith('/assets/')
+    || normalized.startsWith('/images/')
+    || normalized.startsWith('/img/')
+    || normalized.startsWith('/fonts/')
+    || /\.(?:png|jpe?g|gif|svg|ico|webp|bmp|css|woff2?|ttf|eot|otf)(?:$|\?)/i.test(normalized)
+  ) {
+    return 'asset';
+  }
+
+  if (/\.(?:m?js)(?:$|\?)/i.test(normalized) && /(?:^|\/)(?:static|assets|js|scripts)\//i.test(normalized)) {
+    return 'asset';
+  }
+
+  if (
+    normalized.startsWith('/')
+    || /^https?:\/\//i.test(normalized)
+    || normalized.startsWith('//')
+  ) {
+    return 'api';
+  }
+
+  return 'api';
+}
+
+function confidenceForKind(kind: ApiResult['kind'], url: string): 'low' | 'medium' | 'high' {
+  if (kind === 'asset') {
+    return 'low';
+  }
+  if (kind === 'unknown') {
+    return url.includes('${') ? 'low' : 'medium';
+  }
+  if (url.startsWith('/')) {
+    return 'high';
+  }
+  if (url.startsWith('//') || /^https?:\/\//i.test(url)) {
+    return 'medium';
+  }
+  return 'low';
+}
+
+function resolveObjectExpression(
+  node: t.Expression,
+  resolver: ReturnType<typeof createStringResolver>,
+): t.ObjectExpression | undefined {
+  if (t.isObjectExpression(node)) {
+    return node;
+  }
+
+  if (t.isCallExpression(node)) {
+    let current: t.Expression | undefined = node;
+    for (let hop = 0; hop < 3 && current && t.isCallExpression(current); hop += 1) {
+      const substituted = resolver.inlineCall(current);
+      if (!substituted) {
+        break;
+      }
+      if (t.isObjectExpression(substituted)) {
+        return substituted;
+      }
+      current = substituted;
+    }
+  }
+
+  return undefined;
 }
 
 function methodFromConfig(config: t.ObjectExpression): string | undefined {

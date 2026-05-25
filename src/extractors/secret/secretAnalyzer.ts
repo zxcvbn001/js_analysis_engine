@@ -2,9 +2,9 @@ import type { LLMSecretAnalyzer } from '../../llm/analyzers/llmSecretAnalyzer.js
 import type { SecretContext } from '../../types/llm.js';
 import type { AnalyzeMode, ApiResult, SecretResult } from '../../types/results.js';
 import { uniqueBy } from '../../utils/dedupe.js';
-import { logError, logInfo } from '../../utils/logger.js';
+import { errorFields, logError, logInfo } from '../../utils/logger.js';
 import { extractSecretContext } from './contextExtractor.js';
-import { findSecretCandidates } from './secretCandidateFinder.js';
+import { findSecretCandidates, findSecretCandidatesInText } from './secretCandidateFinder.js';
 import type * as t from '@babel/types';
 
 export interface SecretAnalysisOutput {
@@ -30,8 +30,11 @@ export async function analyzeSecrets(
   apis: ApiResult[],
   mode: AnalyzeMode,
   llmAnalyzer?: LLMSecretAnalyzer,
+  options?: { astFallbackUsed?: boolean },
 ): Promise<SecretAnalysisOutput> {
-  const candidates = uniqueBy(findSecretCandidates(ast, content), (candidate) => candidate.value);
+  const astCandidates = findSecretCandidates(ast, content);
+  const textCandidates = options?.astFallbackUsed ? findSecretCandidatesInText(content) : [];
+  const candidates = uniqueBy([...astCandidates, ...textCandidates], (candidate) => candidate.value);
   const contexts = candidates.map((candidate) => extractSecretContext(content, candidate, apis));
   const secrets: SecretResult[] = [];
   let queuedCount = 0;
@@ -40,6 +43,7 @@ export async function analyzeSecrets(
   let confirmedCount = 0;
   let rejectedCount = 0;
   let batchCount = 0;
+  const llmEnabled = Boolean(llmAnalyzer?.isEnabled());
 
   const fallbackById = new Map<string, SecretResult>();
   for (const context of contexts) {
@@ -54,13 +58,32 @@ export async function analyzeSecrets(
     fallbackById.set(context.candidate.id, fallback);
   }
 
-  if (mode === 'full' && llmAnalyzer?.isEnabled()) {
+  logInfo('llm_secret_analysis_decision', {
+    mode,
+    llmEnabled,
+    candidateCount: candidates.length,
+    astCandidateCount: astCandidates.length,
+    textCandidateCount: textCandidates.length,
+    contextCount: contexts.length,
+    astFallbackUsed: options?.astFallbackUsed === true,
+    reason: mode !== 'full'
+      ? 'mode is not full'
+      : !llmEnabled
+        ? 'llm analyzer is not enabled'
+        : candidates.length === 0
+          ? 'no secret candidates'
+          : 'llm batch review will run',
+  });
+
+  if (mode === 'full' && llmEnabled && llmAnalyzer) {
     for (const batch of chunks(contexts, LLM_BATCH_SIZE)) {
       batchCount += 1;
+      queuedCount += batch.length;
       logInfo('llm_secret_batch_start', {
         batchIndex: batchCount,
         batchSize: batch.length,
         candidateCount: contexts.length,
+        candidates: batch.map((context) => candidateLogFields(context)),
       });
       try {
         const results = await llmAnalyzer.analyzeBatch(batch);
@@ -77,6 +100,16 @@ export async function analyzeSecrets(
           } else {
             rejectedCount += 1;
           }
+          logInfo('llm_secret_candidate_reviewed', {
+            batchIndex: batchCount,
+            ...candidateLogFields(context),
+            reviewed: Boolean(llm),
+            isSecret: Boolean(llm?.is_secret),
+            secretType: llm?.secret_type,
+            severity: llm?.severity,
+            confidence: llm?.confidence,
+            reasonLength: llm?.reason.length ?? 0,
+          });
         }
         logInfo('llm_secret_batch_completed', {
           batchIndex: batchCount,
@@ -86,10 +119,11 @@ export async function analyzeSecrets(
           confirmedCount,
           rejectedCount,
         });
-      } catch {
+      } catch (error) {
         logError('llm_secret_batch_failed', {
           batchIndex: batchCount,
           batchSize: batch.length,
+          ...errorFields(error),
         });
         reviewedCount += batch.length;
         droppedCount += batch.length;
@@ -102,13 +136,19 @@ export async function analyzeSecrets(
         secrets.push(fallback);
       }
     }
+    logInfo('llm_secret_fallback_used', {
+      mode,
+      llmEnabled,
+      fallbackCount: secrets.length,
+      candidateCount: candidates.length,
+    });
   }
 
   return {
     secrets: uniqueBy(secrets, (secret) => `${secret.type}:${secret.value ?? ''}:${secret.evidence ?? ''}`),
     contexts,
     llm: {
-      enabled: Boolean(llmAnalyzer?.isEnabled()),
+      enabled: llmEnabled,
       candidateCount: candidates.length,
       queuedCount,
       droppedCount,
@@ -117,6 +157,18 @@ export async function analyzeSecrets(
       rejectedCount,
       batchCount,
     },
+  };
+}
+
+function candidateLogFields(context: SecretContext): Record<string, unknown> {
+  return {
+    candidateId: context.candidate.id,
+    candidateType: context.candidate.type,
+    candidateSeverity: context.candidate.severity,
+    valueLength: context.candidate.value.length,
+    valueHash: context.candidate.id,
+    contextLength: context.context.length,
+    nearbyApiCount: context.nearbyApis.length,
   };
 }
 

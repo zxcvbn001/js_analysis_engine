@@ -1,5 +1,6 @@
 import type { LLMProvider, LLMSecretBatchResult, LLMSecretResult, SecretContext } from '../../types/llm.js';
 import { getConfig } from '../../config/appConfig.js';
+import { errorFields, logError, logInfo } from '../../utils/logger.js';
 import { buildSecretBatchPrompt, buildSecretPrompt } from '../prompts/secretPrompt.js';
 
 export interface DeepSeekProviderOptions {
@@ -23,26 +24,54 @@ export class DeepSeekProvider implements LLMProvider {
   }
 
   async analyzeSecret(input: SecretContext): Promise<LLMSecretResult> {
-    const content = await this.completeJson(buildSecretPrompt(input));
+    const content = await this.completeJson(buildSecretPrompt(input), {
+      operation: 'secret-single',
+      candidateCount: 1,
+      candidateIds: [input.candidate.id],
+    });
     return normalizeLLMResult(JSON.parse(content));
   }
 
   async analyzeSecretsBatch(input: SecretContext[]): Promise<LLMSecretBatchResult[]> {
-    const content = await this.completeJson(buildSecretBatchPrompt(input));
+    const content = await this.completeJson(buildSecretBatchPrompt(input), {
+      operation: 'secret-batch',
+      candidateCount: input.length,
+      candidateIds: input.map((context) => context.candidate.id),
+    });
     const payload = JSON.parse(content) as { results?: unknown[] };
     return (payload.results ?? []).map(normalizeLLMBatchResult);
   }
 
-  private async completeJson(prompt: string): Promise<string> {
+  private async completeJson(prompt: string, meta: { operation: string; candidateCount: number; candidateIds: string[] }): Promise<string> {
     if (!this.options.apiKey) {
+      logError('llm_provider_request_blocked', {
+        provider: 'deepseek',
+        model: this.options.model,
+        operation: meta.operation,
+        reason: 'LLM_API_KEY is not configured',
+      });
       throw new Error('LLM_API_KEY is not configured');
     }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    const url = `${this.options.baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const startedAt = Date.now();
 
     try {
-      const response = await fetch(`${this.options.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      logInfo('llm_provider_request_start', {
+        provider: 'deepseek',
+        model: this.options.model,
+        baseUrl: this.options.baseUrl,
+        url,
+        operation: meta.operation,
+        candidateCount: meta.candidateCount,
+        candidateIds: meta.candidateIds,
+        promptLength: prompt.length,
+        timeoutMs: this.options.timeoutMs,
+      });
+
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.options.apiKey}`,
@@ -57,6 +86,15 @@ export class DeepSeekProvider implements LLMProvider {
         signal: controller.signal,
       });
 
+      logInfo('llm_provider_response_received', {
+        provider: 'deepseek',
+        model: this.options.model,
+        operation: meta.operation,
+        status: response.status,
+        ok: response.ok,
+        durationMs: Date.now() - startedAt,
+      });
+
       if (!response.ok) {
         throw new Error(`DeepSeek request failed with ${response.status}`);
       }
@@ -67,7 +105,24 @@ export class DeepSeekProvider implements LLMProvider {
         throw new Error('DeepSeek returned an empty response');
       }
 
+      logInfo('llm_provider_response_parsed', {
+        provider: 'deepseek',
+        model: this.options.model,
+        operation: meta.operation,
+        contentLength: content.length,
+        durationMs: Date.now() - startedAt,
+      });
+
       return content;
+    } catch (error) {
+      logError('llm_provider_request_failed', {
+        provider: 'deepseek',
+        model: this.options.model,
+        operation: meta.operation,
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
