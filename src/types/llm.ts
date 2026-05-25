@@ -47,8 +47,20 @@ export interface LLMFindingReviewResult {
   reason: string;
 }
 
+export interface UnifiedReviewContext {
+  secrets: SecretContext[];
+  findings: FindingReviewContext[];
+  apis: Array<{ url: string; method?: string; params?: string[]; headers?: string[] }>;
+}
+
+export interface LLMUnifiedReviewResult {
+  secrets: LLMSecretBatchResult[];
+  findings: LLMFindingReviewResult[];
+}
+
 export interface LLMProvider {
   analyzeSecret(input: SecretContext): Promise<LLMSecretResult>;
   analyzeSecretsBatch?(input: SecretContext[]): Promise<LLMSecretBatchResult[]>;
   analyzeFindingsBatch?(input: FindingReviewContext[]): Promise<LLMFindingReviewResult[]>;
+  analyzeUnifiedBatch?(input: UnifiedReviewContext): Promise<LLMUnifiedReviewResult>;
 }

@@ -1,4 +1,4 @@
-import type { AnalysisResponse } from './results.js';
+import type { AnalysisApiResponse } from './results.js';
 
 export type AnalysisTaskStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -7,7 +7,7 @@ export interface AnalysisTask {
   status: AnalysisTaskStatus;
   createdAt: string;
   updatedAt: string;
-  result?: AnalysisResponse;
+  result?: AnalysisApiResponse;
   error?: {
     message: string;
   };

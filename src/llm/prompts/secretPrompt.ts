@@ -1,4 +1,4 @@
-import type { SecretContext } from '../../types/llm.js';
+import type { SecretContext, UnifiedReviewContext } from '../../types/llm.js';
 import type { FindingReviewContext } from '../../types/llm.js';
 
 export function buildSecretPrompt(input: SecretContext): string {
@@ -67,14 +67,55 @@ export function buildFindingBatchPrompt(input: FindingReviewContext[]): string {
         id: context.id,
         category: context.finding.category,
         type: context.finding.type,
-        value: context.finding.value,
+        value: trimForPrompt(context.finding.value, 500),
         severity: context.finding.severity,
         confidence: context.finding.confidence,
         source: context.finding.source,
-        evidence: context.finding.evidence,
+        evidence: trimForPrompt(context.finding.evidence, 900),
       })),
-      null,
-      2,
     ),
   ].join('\n');
+}
+
+export function buildUnifiedReviewPrompt(input: UnifiedReviewContext): string {
+  return [
+    'You are a JavaScript frontend security analysis expert.',
+    'Review secret candidates and security findings together using the shared API/context evidence.',
+    'Return JSON only with keys: secrets, findings.',
+    'secrets must be an array. Each item: id, is_secret, secret_type, severity, confidence, reason.',
+    'findings must be an array. Each item: id, is_risk, category, type, severity, confidence, reason.',
+    'Reject false positives. Do not classify normal frontend HTTP calls as SSRF/RCE unless there is evidence of attacker-controlled server-side fetching or dangerous code execution.',
+    '',
+    'Input:',
+    JSON.stringify({
+      apis: input.apis.slice(0, 80),
+      secrets: input.secrets.map((context) => ({
+        id: context.candidate.id,
+        type: context.candidate.type,
+        value: trimForPrompt(context.candidate.value, 300),
+        evidence: trimForPrompt(context.candidate.evidence, 500),
+        variableName: context.candidate.variableName,
+        nearbyApis: context.nearbyApis.slice(0, 8),
+        nearbyHeaders: context.nearbyHeaders.slice(0, 8),
+        context: trimForPrompt(context.context, 1200),
+      })),
+      findings: input.findings.map((context) => ({
+        id: context.id,
+        category: context.finding.category,
+        type: context.finding.type,
+        value: trimForPrompt(context.finding.value, 400),
+        severity: context.finding.severity,
+        confidence: context.finding.confidence,
+        source: context.finding.source,
+        evidence: trimForPrompt(context.finding.evidence, 800),
+      })),
+    }),
+  ].join('\n');
+}
+
+function trimForPrompt(value: string | undefined, maxLength: number): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return value.length > maxLength ? `${value.slice(0, maxLength)}... [truncated ${value.length - maxLength} chars]` : value;
 }

@@ -119,10 +119,22 @@ export class LLMFindingAnalyzer {
         });
       } catch (error) {
         stats.droppedCount += batch.length;
+        reviewed.push(...batch.map((context) => ({
+          ...context.finding,
+          llmReview: {
+            confirmed: false,
+            category: context.finding.category,
+            type: context.finding.type,
+            severity: context.finding.severity,
+            confidence: context.finding.confidence,
+            reason: 'LLM finding review failed; original rule finding was preserved.',
+          },
+        })));
         logError('llm_finding_batch_failed', {
           batchIndex: stats.batchCount,
           batchSize: batch.length,
           durationMs: Date.now() - startedAt,
+          preservedCount: batch.length,
           ...errorFields(error),
         });
       }

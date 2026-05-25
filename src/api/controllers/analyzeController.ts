@@ -10,6 +10,7 @@ import { getConfig } from '../../config/appConfig.js';
 import { getAnalysisTask, submitAnalysisTask } from '../../engine/analyzers/analysisTaskStore.js';
 import { summarizeContent, summarizeMode } from '../../utils/analysisSummary.js';
 import { errorFields, logError, logInfo } from '../../utils/logger.js';
+import { formatAnalysisResponse } from '../response/analysisResponseFormatter.js';
 
 const llmAnalyzer = new LLMSecretAnalyzer(createLLMProvider());
 
@@ -21,10 +22,12 @@ export async function analyzeJsController(request: FastifyRequest, reply: Fastif
   }
 
   const mode = parsed.data.fast_mode === true ? 'fast' : parsed.data.mode ?? 'full';
+  const responseMode = parsed.data.response_mode ?? 'full';
   const hasContent = Boolean(parsed.data.content?.trim());
   logInfo('analyze_js_request_received', {
     url: parsed.data.url,
     async: parsed.data.async === true,
+    responseMode,
     hasContent,
     inputContentLength: parsed.data.content?.length ?? 0,
     ...summarizeMode(mode),
@@ -34,6 +37,7 @@ export async function analyzeJsController(request: FastifyRequest, reply: Fastif
       url: parsed.data.url,
       content: parsed.data.content,
       mode,
+      responseMode,
     });
     reply.code(202).send({
       success: true,
@@ -72,7 +76,7 @@ export async function analyzeJsController(request: FastifyRequest, reply: Fastif
     return;
   }
   const result = await analyzeJavaScript({ url: parsed.data.url, content, mode });
-  reply.send(result);
+  reply.send(formatAnalysisResponse(result, responseMode));
 }
 
 export async function getAnalyzeTaskController(request: FastifyRequest, reply: FastifyReply): Promise<void> {

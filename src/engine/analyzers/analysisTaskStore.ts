@@ -6,11 +6,14 @@ import { fetchTextContent } from '../../utils/fetchContent.js';
 import { analyzeJavaScript } from './javascriptAnalyzer.js';
 import { summarizeAnalysis, summarizeContent } from '../../utils/analysisSummary.js';
 import { logError, logInfo } from '../../utils/logger.js';
+import type { AnalysisResponseMode } from '../../types/results.js';
+import { formatAnalysisResponse } from '../../api/response/analysisResponseFormatter.js';
 
 interface SubmitTaskInput {
   url?: string;
   content?: string;
   mode: AnalyzeMode;
+  responseMode: AnalysisResponseMode;
 }
 
 const tasks = new Map<string, AnalysisTask>();
@@ -31,6 +34,7 @@ export function submitAnalysisTask(input: SubmitTaskInput): AnalysisTask {
     taskId: task.id,
     url: input.url,
     mode: input.mode,
+    responseMode: input.responseMode,
     hasContent: Boolean(input.content?.trim()),
     inputContentLength: input.content?.length ?? 0,
   });
@@ -54,6 +58,7 @@ async function runTask(id: string, input: SubmitTaskInput): Promise<void> {
   logInfo('analysis_task_running', {
     taskId: id,
     url: input.url,
+    responseMode: input.responseMode,
   });
 
   const source = input.content?.trim() ? 'content' : 'download';
@@ -64,11 +69,12 @@ async function runTask(id: string, input: SubmitTaskInput): Promise<void> {
     ...summarizeContent({ content, source, url: input.url }),
   });
   const result = await analyzeJavaScript({ url: input.url, content, mode: input.mode });
+  const formattedResult = formatAnalysisResponse(result, input.responseMode);
 
   if (!result.success) {
     updateTask(id, {
       status: 'failed',
-      result,
+      result: formattedResult,
       error: result.error,
     });
     logError('analysis_task_failed', {
@@ -82,7 +88,7 @@ async function runTask(id: string, input: SubmitTaskInput): Promise<void> {
 
   updateTask(id, {
     status: 'completed',
-    result,
+    result: formattedResult,
   });
   logInfo('analysis_task_completed', {
     taskId: id,

@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { configureFileLogger } from '../utils/logger.js';
 import { analyzeJavaScript } from '../engine/analyzers/javascriptAnalyzer.js';
-import { LLMFindingAnalyzer } from '../llm/analyzers/llmFindingAnalyzer.js';
 import { LLMSecretAnalyzer } from '../llm/analyzers/llmSecretAnalyzer.js';
+import { LLMUnifiedAnalyzer } from '../llm/analyzers/llmUnifiedAnalyzer.js';
 import type { LLMProvider } from '../types/llm.js';
 import { DeepSeekProvider } from '../llm/providers/deepSeekProvider.js';
 
@@ -242,6 +242,31 @@ describe('secret detection', () => {
           };
         });
       },
+      async analyzeUnifiedBatch(input) {
+        batchSizes.push(input.secrets.length);
+        return {
+          secrets: input.secrets.map((context) => {
+            const isReal = context.candidate.value.includes('Bearer realtoken');
+            return {
+              id: context.candidate.id,
+              is_secret: isReal,
+              secret_type: 'bearer-token',
+              severity: 'high' as const,
+              confidence: isReal ? 0.95 : 0.1,
+              reason: isReal ? 'confirmed token' : 'placeholder false positive',
+            };
+          }),
+          findings: input.findings.map((context) => ({
+            id: context.id,
+            is_risk: context.finding.value?.includes('Bearer realtoken') || context.finding.type === 'api-endpoint',
+            category: context.finding.category,
+            type: context.finding.type,
+            severity: context.finding.severity,
+            confidence: context.finding.value?.includes('Bearer realtoken') ? 0.95 : 0.5,
+            reason: 'unified finding review',
+          })),
+        };
+      },
     };
     const llmAnalyzer = new LLMSecretAnalyzer(provider);
     const result = await analyzeJavaScript({
@@ -251,6 +276,7 @@ describe('secret detection', () => {
       `,
       mode: 'full',
       llmAnalyzer,
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
     });
 
     expect(result.success).toBe(true);
@@ -299,12 +325,35 @@ describe('secret detection', () => {
           reason: 'test false positive',
         }));
       },
+      async analyzeUnifiedBatch(input) {
+        batchSizes.push(input.secrets.length);
+        return {
+          secrets: input.secrets.map((context) => ({
+            id: context.candidate.id,
+            is_secret: false,
+            secret_type: 'token',
+            severity: 'low' as const,
+            confidence: 0.1,
+            reason: 'test false positive',
+          })),
+          findings: input.findings.map((context) => ({
+            id: context.id,
+            is_risk: false,
+            category: context.finding.category,
+            type: context.finding.type,
+            severity: 'low' as const,
+            confidence: 0.1,
+            reason: 'test false positive',
+          })),
+        };
+      },
     };
     const content = Array.from({ length: 23 }, (_, index) => `const token${index} = 'Bearer tokenvalue${index}abcdefghijklmnop';`).join('\n');
     const result = await analyzeJavaScript({
       content,
       mode: 'full',
       llmAnalyzer: new LLMSecretAnalyzer(provider),
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
     });
 
     expect(result.success).toBe(true);
@@ -312,11 +361,12 @@ describe('secret detection', () => {
       return;
     }
 
-    expect(batchSizes).toEqual([10, 10, 3]);
+    expect(batchSizes.slice(0, 5)).toEqual([5, 5, 5, 5, 3]);
+    expect(batchSizes.reduce((sum, size) => sum + size, 0)).toBe(23);
     expect(result.secrets).toHaveLength(0);
     expect(result.meta.analysis.llm.reviewedCount).toBe(23);
     expect(result.meta.analysis.llm.rejectedCount).toBe(23);
-    expect(result.meta.analysis.llm.batchCount).toBe(3);
+    expect(result.meta.analysis.llm.batchCount).toBe(5);
   });
 
   it('writes detailed LLM review logs in full mode', async () => {
@@ -335,25 +385,44 @@ describe('secret detection', () => {
           reason: 'confirmed by test provider',
         }));
       },
+      async analyzeUnifiedBatch(input) {
+        return {
+          secrets: input.secrets.map((context) => ({
+            id: context.candidate.id,
+            is_secret: true,
+            secret_type: context.candidate.type,
+            severity: 'high' as const,
+            confidence: 0.9,
+            reason: 'confirmed by test provider',
+          })),
+          findings: input.findings.map((context) => ({
+            id: context.id,
+            is_risk: true,
+            category: context.finding.category,
+            type: context.finding.type,
+            severity: context.finding.severity,
+            confidence: 0.9,
+            reason: 'confirmed by test provider',
+          })),
+        };
+      },
     };
 
     const result = await analyzeJavaScript({
       content: "const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';",
       mode: 'full',
       llmAnalyzer: new LLMSecretAnalyzer(provider),
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
     });
 
     expect(result.success).toBe(true);
     const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
     const logText = readFileSync(logFile, 'utf8');
-    expect(logText).toContain('llm_secret_analysis_decision');
-    expect(logText).toContain('llm_secret_batch_start');
-    expect(logText).toContain('llm_secret_batch_call_start');
-    expect(logText).toContain('llm_secret_batch_call_completed');
-    expect(logText).toContain('llm_secret_candidate_reviewed');
-    expect(logText).toContain('llm_secret_batch_completed');
-    expect(logText).toContain('candidateId');
-    expect(logText).toContain('contextLength');
+    expect(logText).toContain('llm_unified_review_decision');
+    expect(logText).toContain('llm_unified_batch_start');
+    expect(logText).toContain('llm_unified_batch_completed');
+    expect(logText).toContain('secretIds');
+    expect(logText).toContain('findingIds');
   });
 
   it('logs why LLM review is not requested', async () => {
@@ -376,9 +445,9 @@ describe('secret detection', () => {
     const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
     const logText = readFileSync(logFile, 'utf8');
     expect(logText).toContain('analyze_js_llm_runtime');
-    expect(logText).toContain('llm_secret_analysis_decision');
-    expect(logText).toContain('llm_secret_review_not_requested');
-    expect(logText).toContain('no secret candidates');
+    expect(logText).toContain('llm_unified_review_decision');
+    expect(logText).toContain('llm_unified_review_not_requested');
+    expect(logText).toContain('llm provider is not configured');
   });
 
   it('writes detailed provider prompt and response logs with redaction', async () => {
@@ -452,17 +521,27 @@ describe('secret detection', () => {
       async analyzeSecretsBatch() {
         return [];
       },
-      async analyzeFindingsBatch(input) {
-        reviewedTypes.push(...input.map((context) => context.finding.type));
-        return input.map((context) => ({
-          id: context.id,
-          is_risk: context.finding.type === 'api-endpoint',
-          category: context.finding.category,
-          type: context.finding.type,
-          severity: context.finding.severity,
-          confidence: context.finding.type === 'api-endpoint' ? 0.91 : 0.05,
-          reason: context.finding.type === 'api-endpoint' ? 'confirmed API exposure' : 'false positive',
-        }));
+      async analyzeUnifiedBatch(input) {
+        reviewedTypes.push(...input.findings.map((context) => context.finding.type));
+        return {
+          secrets: input.secrets.map((context) => ({
+            id: context.candidate.id,
+            is_secret: false,
+            secret_type: context.candidate.type,
+            severity: 'low' as const,
+            confidence: 0.05,
+            reason: 'false positive',
+          })),
+          findings: input.findings.map((context) => ({
+            id: context.id,
+            is_risk: context.finding.type === 'api-endpoint',
+            category: context.finding.category,
+            type: context.finding.type,
+            severity: context.finding.severity,
+            confidence: context.finding.type === 'api-endpoint' ? 0.91 : 0.05,
+            reason: context.finding.type === 'api-endpoint' ? 'confirmed API exposure' : 'false positive',
+          })),
+        };
       },
     };
 
@@ -473,7 +552,7 @@ describe('secret detection', () => {
       `,
       mode: 'full',
       llmAnalyzer: new LLMSecretAnalyzer(provider),
-      findingLlmAnalyzer: new LLMFindingAnalyzer(provider),
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
     });
 
     expect(result.success).toBe(true);
@@ -494,5 +573,35 @@ describe('secret detection', () => {
     expect(result.meta.analysis.llm.findingReviewedCount).toBe(reviewedTypes.length);
     expect(result.meta.analysis.llm.findingConfirmedCount).toBe(1);
     expect(result.meta.analysis.llm.findingRejectedCount).toBe(reviewedTypes.length - 1);
+  });
+
+  it('preserves rule findings when LLM finding review fails', async () => {
+    const provider: LLMProvider = {
+      async analyzeSecret() {
+        throw new Error('secret path should not be used');
+      },
+      async analyzeSecretsBatch() {
+        return [];
+      },
+      async analyzeUnifiedBatch() {
+        throw new Error('llm timeout');
+      },
+    };
+
+    const result = await analyzeJavaScript({
+      content: "fetch('/api/preserved');",
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer(provider),
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'api-endpoint', value: '/api/preserved' })]));
+    expect(result.findings.some((finding) => finding.llmReview?.reason.includes('preserved'))).toBe(true);
+    expect(result.meta.analysis.llm.findingDroppedCount).toBeGreaterThan(0);
   });
 });

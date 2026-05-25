@@ -31,6 +31,30 @@ describe('http api', () => {
     await app.close();
   });
 
+  it('returns a compact response when response_mode=compact', async () => {
+    const app = await buildServer();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/analyze/js',
+      payload: {
+        url: 'https://example.com/app.js',
+        content: "fetch('/api/user')",
+        fast_mode: true,
+        response_mode: 'compact',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.success).toBe(true);
+    expect(body.summary.apiCount).toBe(1);
+    expect(body.apis[0].url).toBe('/api/user');
+    expect(body.groups).toBeUndefined();
+    expect(body.meta).toBeUndefined();
+    expect(body.risk).toBeUndefined();
+    await app.close();
+  });
+
   it('validates bad requests', async () => {
     const app = await buildServer();
     const response = await app.inject({
@@ -186,6 +210,44 @@ describe('http api', () => {
     expect(taskBody.task?.status).toBe('completed');
     expect(taskBody.task?.result?.success).toBe(true);
     expect(taskBody.task?.result?.apis?.[0]?.url).toBe('/async-api');
+
+    await app.close();
+  });
+
+  it('returns compact task results when async request uses response_mode=compact', async () => {
+    const app = await buildServer(testConfig());
+    const submitted = await app.inject({
+      method: 'POST',
+      url: '/analyze/js',
+      payload: {
+        content: "fetch('/async-compact-api')",
+        async: true,
+        response_mode: 'compact',
+      },
+    });
+
+    expect(submitted.statusCode).toBe(202);
+    const taskId = submitted.json().task_id;
+    expect(taskId).toBeTruthy();
+
+    let taskBody: { task?: { status: string; result?: { success: boolean; summary?: { apiCount: number }; apis?: Array<{ url: string }>; groups?: unknown } } } = {};
+    for (let index = 0; index < 10; index += 1) {
+      const taskResponse = await app.inject({
+        method: 'GET',
+        url: `/analyze/tasks/${taskId}`,
+      });
+      taskBody = taskResponse.json();
+      if (taskBody.task?.status === 'completed') {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(taskBody.task?.status).toBe('completed');
+    expect(taskBody.task?.result?.success).toBe(true);
+    expect(taskBody.task?.result?.summary?.apiCount).toBe(1);
+    expect(taskBody.task?.result?.apis?.[0]?.url).toBe('/async-compact-api');
+    expect(taskBody.task?.result?.groups).toBeUndefined();
 
     await app.close();
   });

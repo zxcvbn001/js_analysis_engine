@@ -1,5 +1,6 @@
 export type Severity = 'low' | 'medium' | 'high';
 export type AnalyzeMode = 'fast' | 'full';
+export type AnalysisResponseMode = 'full' | 'compact';
 
 export interface ApiResult {
   url: string;
@@ -102,6 +103,28 @@ export interface AnalysisMeta {
   };
 }
 
+export interface CompactAnalysisSummary {
+  apiCount: number;
+  assetCount: number;
+  paramCount: number;
+  authCount: number;
+  secretCount: number;
+  riskCount: number;
+  findingCount: number;
+  endpointCount: number;
+  exposureCount: number;
+  scriptCount: number;
+  llm: {
+    enabled: boolean;
+    reviewedCount: number;
+    confirmedCount: number;
+    rejectedCount: number;
+    findingReviewedCount: number;
+    findingConfirmedCount: number;
+    findingRejectedCount: number;
+  };
+}
+
 export interface AnalysisResult {
   success: true;
   url?: string;
@@ -116,6 +139,18 @@ export interface AnalysisResult {
   meta: AnalysisMeta;
 }
 
+export interface CompactAnalysisResult {
+  success: true;
+  url?: string;
+  summary: CompactAnalysisSummary;
+  apis: ApiResult[];
+  assets: AssetResult[];
+  params: ParamResult[];
+  auth: string[];
+  secrets: SecretResult[];
+  findings: FindingResult[];
+}
+
 export interface AnalysisError {
   success: false;
   error: {
@@ -124,6 +159,7 @@ export interface AnalysisError {
 }
 
 export type AnalysisResponse = AnalysisResult | AnalysisError;
+export type AnalysisApiResponse = AnalysisResult | CompactAnalysisResult | AnalysisError;
 
 export interface AnalyzeOptions {
   mode: AnalyzeMode;

@@ -160,7 +160,7 @@ CONFIG_FILE=/etc/js-analysis-engine/config.json npm start
     "model": "deepseek-v4-flash",
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com",
-    "timeoutMs": 8000,
+    "timeoutMs": 30000,
     "logPrompts": true,
     "logResponses": true,
     "logRawPayloads": false
@@ -187,7 +187,7 @@ LLM_PROVIDER=deepseek
 LLM_MODEL=deepseek-v4-flash
 LLM_API_KEY=your-llm-key
 LLM_BASE_URL=https://api.deepseek.com
-LLM_TIMEOUT_MS=8000
+LLM_TIMEOUT_MS=30000
 LLM_LOG_PROMPTS=true
 LLM_LOG_RESPONSES=true
 LLM_LOG_RAW_PAYLOADS=false

@@ -139,10 +139,11 @@ export class LLMSecretAnalyzer {
     return Boolean(this.provider);
   }
 
-  runtimeStatus(): { enabled: boolean; supportsBatch: boolean } {
+  runtimeStatus(): { enabled: boolean; supportsBatch: boolean; supportsUnified: boolean } {
     return {
       enabled: Boolean(this.provider),
       supportsBatch: Boolean(this.provider?.analyzeSecretsBatch),
+      supportsUnified: Boolean(this.provider?.analyzeUnifiedBatch),
     };
   }
 

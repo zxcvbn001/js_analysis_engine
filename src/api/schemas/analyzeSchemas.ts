@@ -5,6 +5,7 @@ export const analyzeJsRequestSchema = z.object({
   content: z.string().optional(),
   fast_mode: z.boolean().optional(),
   mode: z.enum(['fast', 'full']).optional(),
+  response_mode: z.enum(['full', 'compact']).optional(),
   async: z.boolean().optional(),
 }).refine((value) => Boolean(value.content?.trim()) || Boolean(value.url?.trim()), {
   message: 'Either content or url is required',

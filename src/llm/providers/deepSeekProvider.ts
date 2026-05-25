@@ -1,7 +1,7 @@
-import type { FindingReviewContext, LLMFindingReviewResult, LLMProvider, LLMSecretBatchResult, LLMSecretResult, SecretContext } from '../../types/llm.js';
+import type { FindingReviewContext, LLMFindingReviewResult, LLMProvider, LLMSecretBatchResult, LLMSecretResult, LLMUnifiedReviewResult, SecretContext, UnifiedReviewContext } from '../../types/llm.js';
 import { getConfig } from '../../config/appConfig.js';
 import { errorFields, logError, logInfo } from '../../utils/logger.js';
-import { buildFindingBatchPrompt, buildSecretBatchPrompt, buildSecretPrompt } from '../prompts/secretPrompt.js';
+import { buildFindingBatchPrompt, buildSecretBatchPrompt, buildSecretPrompt, buildUnifiedReviewPrompt } from '../prompts/secretPrompt.js';
 
 export interface DeepSeekProviderOptions {
   apiKey: string;
@@ -56,6 +56,22 @@ export class DeepSeekProvider implements LLMProvider {
     });
     const payload = JSON.parse(content) as { results?: unknown[] };
     return (payload.results ?? []).map(normalizeLLMFindingResult);
+  }
+
+  async analyzeUnifiedBatch(input: UnifiedReviewContext): Promise<LLMUnifiedReviewResult> {
+    const content = await this.completeJson(buildUnifiedReviewPrompt(input), {
+      operation: 'unified-batch',
+      candidateCount: input.secrets.length + input.findings.length,
+      candidateIds: [
+        ...input.secrets.map((context) => context.candidate.id),
+        ...input.findings.map((context) => context.id),
+      ],
+    });
+    const payload = JSON.parse(content) as { secrets?: unknown[]; findings?: unknown[] };
+    return {
+      secrets: (payload.secrets ?? []).map(normalizeLLMBatchResult),
+      findings: (payload.findings ?? []).map(normalizeLLMFindingResult),
+    };
   }
 
   private async completeJson(prompt: string, meta: { operation: string; candidateCount: number; candidateIds: string[] }): Promise<string> {

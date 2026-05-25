@@ -4,14 +4,14 @@ import { collectStringConstants } from '../propagation/stringResolver.js';
 import { buildWrapperRegistry } from '../wrapper/wrapperRegistry.js';
 import { extractApis } from '../../extractors/api/apiExtractor.js';
 import { analyzeRisks } from '../../extractors/risk/riskAnalyzer.js';
-import { analyzeSecrets } from '../../extractors/secret/secretAnalyzer.js';
+import { extractSecretRules } from '../../extractors/secret/secretAnalyzer.js';
 import { extractAssets } from '../../extractors/assets/assetExtractor.js';
 import { enrichApisWithBaseUrl, extractBaseUrlCandidates } from '../../extractors/api/baseUrlExtractor.js';
 import { analyzeFindings } from '../../extractors/findings/findingAnalyzer.js';
 import { filterUnconfirmedSensitiveFindings, groupFindings } from '../../extractors/findings/findingGrouper.js';
 import { extractTextApis, extractTextAssets, extractTextBaseUrlCandidates } from '../../extractors/text/textFallbackExtractor.js';
-import { LLMFindingAnalyzer } from '../../llm/analyzers/llmFindingAnalyzer.js';
 import { LLMSecretAnalyzer } from '../../llm/analyzers/llmSecretAnalyzer.js';
+import { LLMUnifiedAnalyzer } from '../../llm/analyzers/llmUnifiedAnalyzer.js';
 import { createLLMProvider } from '../../llm/providers/providerFactory.js';
 import type { AnalysisResponse, AnalyzeMode, AssetResult } from '../../types/results.js';
 import { summarizeAnalysis } from '../../utils/analysisSummary.js';
@@ -19,14 +19,14 @@ import { errorFields, logError, logInfo, logWarn } from '../../utils/logger.js';
 
 const sharedLLMProvider = createLLMProvider();
 const sharedLLMAnalyzer = new LLMSecretAnalyzer(sharedLLMProvider);
-const sharedFindingLLMAnalyzer = new LLMFindingAnalyzer(sharedLLMProvider);
+const sharedUnifiedLLMAnalyzer = new LLMUnifiedAnalyzer(sharedLLMProvider);
 
 export async function analyzeJavaScript(input: {
   url?: string;
   content: string;
   mode?: AnalyzeMode;
   llmAnalyzer?: LLMSecretAnalyzer;
-  findingLlmAnalyzer?: LLMFindingAnalyzer;
+  unifiedLlmAnalyzer?: LLMUnifiedAnalyzer;
 }): Promise<AnalysisResponse> {
   const startedAt = Date.now();
   try {
@@ -85,7 +85,7 @@ export async function analyzeJavaScript(input: {
       mode: input.mode ?? 'full',
       ...activeLLMAnalyzer.runtimeStatus(),
     });
-    const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'full', activeLLMAnalyzer, {
+    const secretRules = extractSecretRules(ast, input.content, apiExtraction.apis, {
       astFallbackUsed: parsed.fallbackUsed,
     });
     const risk = analyzeRisks(ast, apiExtraction.apis);
@@ -94,20 +94,25 @@ export async function analyzeJavaScript(input: {
       content: input.content,
       apis: apiExtraction.apis,
       assets,
-      secrets: secretExtraction.secrets,
+      secrets: secretRules.secrets,
       risk,
     });
-    const findings = filterUnconfirmedSensitiveFindings({
+    const unifiedReview = await (input.unifiedLlmAnalyzer ?? sharedUnifiedLLMAnalyzer).review({
+      mode: input.mode ?? 'full',
+      secrets: secretRules.contexts,
       findings: rawFindings,
-      secrets: secretExtraction.secrets,
-      requireConfirmedSecrets: (input.mode ?? 'full') === 'full' && secretExtraction.llm.enabled,
+      apis: apiExtraction.apis,
     });
-    const findingReview = await (input.findingLlmAnalyzer ?? sharedFindingLLMAnalyzer).reviewFindings(findings, input.mode ?? 'full');
+    const findings = filterUnconfirmedSensitiveFindings({
+      findings: unifiedReview.findings,
+      secrets: unifiedReview.secrets,
+      requireConfirmedSecrets: (input.mode ?? 'full') === 'full' && unifiedReview.llm.enabled,
+    });
     const groups = groupFindings({
       apis: apiExtraction.apis,
       assets,
-      secrets: secretExtraction.secrets,
-      findings: findingReview.findings,
+      secrets: unifiedReview.secrets,
+      findings,
     });
 
     const response: AnalysisResponse = {
@@ -117,21 +122,15 @@ export async function analyzeJavaScript(input: {
       assets,
       params: apiExtraction.params,
       auth: apiExtraction.auth,
-      secrets: secretExtraction.secrets,
+      secrets: unifiedReview.secrets,
       risk,
-      findings: findingReview.findings,
+      findings,
       groups,
       meta: {
         analysis: {
           llm: {
-            ...secretExtraction.llm,
+            ...unifiedReview.llm,
             batchSize: 10,
-            findingCandidateCount: findingReview.stats.candidateCount,
-            findingReviewedCount: findingReview.stats.reviewedCount,
-            findingConfirmedCount: findingReview.stats.confirmedCount,
-            findingRejectedCount: findingReview.stats.rejectedCount,
-            findingDroppedCount: findingReview.stats.droppedCount,
-            findingBatchCount: findingReview.stats.batchCount,
           },
         },
       },
