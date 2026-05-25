@@ -160,7 +160,10 @@ CONFIG_FILE=/etc/js-analysis-engine/config.json npm start
     "model": "deepseek-v4-flash",
     "apiKey": "",
     "baseUrl": "https://api.deepseek.com",
-    "timeoutMs": 8000
+    "timeoutMs": 8000,
+    "logPrompts": true,
+    "logResponses": true,
+    "logRawPayloads": false
   }
 }
 ```
@@ -185,7 +188,12 @@ LLM_MODEL=deepseek-v4-flash
 LLM_API_KEY=your-llm-key
 LLM_BASE_URL=https://api.deepseek.com
 LLM_TIMEOUT_MS=8000
+LLM_LOG_PROMPTS=true
+LLM_LOG_RESPONSES=true
+LLM_LOG_RAW_PAYLOADS=false
 ```
+
+LLM 交互日志默认记录脱敏后的 prompt/response 摘要。只有临时排障时才建议开启 `LLM_LOG_RAW_PAYLOADS=true`，因为原始 prompt 可能包含源码上下文和敏感候选。
 
 ## API 概览
 

@@ -50,8 +50,16 @@ export interface FindingResult {
   value?: string;
   severity: Severity;
   confidence: number;
-  source: 'api' | 'asset' | 'string' | 'identifier' | 'call' | 'secret' | 'risk';
+  source: 'api' | 'asset' | 'string' | 'identifier' | 'call' | 'secret' | 'risk' | 'llm';
   evidence?: string;
+  llmReview?: {
+    confirmed: boolean;
+    category: string;
+    type: string;
+    severity: Severity;
+    confidence: number;
+    reason: string;
+  };
 }
 
 export interface FindingGroups {
@@ -84,6 +92,12 @@ export interface AnalysisMeta {
       rejectedCount: number;
       batchCount: number;
       batchSize: number;
+      findingCandidateCount: number;
+      findingReviewedCount: number;
+      findingConfirmedCount: number;
+      findingRejectedCount: number;
+      findingDroppedCount: number;
+      findingBatchCount: number;
     };
   };
 }

@@ -61,6 +61,7 @@ export async function analyzeSecrets(
   logInfo('llm_secret_analysis_decision', {
     mode,
     llmEnabled,
+    llmSupportsBatch: llmAnalyzer?.runtimeStatus().supportsBatch ?? false,
     candidateCount: candidates.length,
     astCandidateCount: astCandidates.length,
     textCandidateCount: textCandidates.length,
@@ -74,6 +75,22 @@ export async function analyzeSecrets(
           ? 'no secret candidates'
           : 'llm batch review will run',
   });
+
+  if (mode !== 'full' || !llmEnabled || candidates.length === 0) {
+    logInfo('llm_secret_review_not_requested', {
+      mode,
+      llmEnabled,
+      candidateCount: candidates.length,
+      astCandidateCount: astCandidates.length,
+      textCandidateCount: textCandidates.length,
+      astFallbackUsed: options?.astFallbackUsed === true,
+      reason: mode !== 'full'
+        ? 'mode is not full'
+        : !llmEnabled
+          ? 'llm analyzer is not enabled'
+          : 'no secret candidates',
+    });
+  }
 
   if (mode === 'full' && llmEnabled && llmAnalyzer) {
     for (const batch of chunks(contexts, LLM_BATCH_SIZE)) {

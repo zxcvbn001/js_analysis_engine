@@ -29,6 +29,9 @@ const configSchema = z.object({
     apiKey: z.string(),
     baseUrl: z.string(),
     timeoutMs: z.number().int().min(1000).max(120000),
+    logPrompts: z.boolean(),
+    logResponses: z.boolean(),
+    logRawPayloads: z.boolean(),
   }),
 });
 
@@ -61,6 +64,9 @@ const defaultConfig: AppConfig = {
     apiKey: '',
     baseUrl: 'https://api.deepseek.com',
     timeoutMs: 8000,
+    logPrompts: true,
+    logResponses: true,
+    logRawPayloads: false,
   },
 };
 
@@ -139,6 +145,9 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
       apiKey: process.env.LLM_API_KEY ?? config.llm.apiKey,
       baseUrl: process.env.LLM_BASE_URL ?? config.llm.baseUrl,
       timeoutMs: readNumberEnv('LLM_TIMEOUT_MS', config.llm.timeoutMs),
+      logPrompts: readBooleanEnv('LLM_LOG_PROMPTS', config.llm.logPrompts),
+      logResponses: readBooleanEnv('LLM_LOG_RESPONSES', config.llm.logResponses),
+      logRawPayloads: readBooleanEnv('LLM_LOG_RAW_PAYLOADS', config.llm.logRawPayloads),
     },
   };
 }

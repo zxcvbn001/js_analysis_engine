@@ -10,15 +10,24 @@ import { enrichApisWithBaseUrl, extractBaseUrlCandidates } from '../../extractor
 import { analyzeFindings } from '../../extractors/findings/findingAnalyzer.js';
 import { filterUnconfirmedSensitiveFindings, groupFindings } from '../../extractors/findings/findingGrouper.js';
 import { extractTextApis, extractTextAssets, extractTextBaseUrlCandidates } from '../../extractors/text/textFallbackExtractor.js';
+import { LLMFindingAnalyzer } from '../../llm/analyzers/llmFindingAnalyzer.js';
 import { LLMSecretAnalyzer } from '../../llm/analyzers/llmSecretAnalyzer.js';
 import { createLLMProvider } from '../../llm/providers/providerFactory.js';
 import type { AnalysisResponse, AnalyzeMode, AssetResult } from '../../types/results.js';
 import { summarizeAnalysis } from '../../utils/analysisSummary.js';
 import { errorFields, logError, logInfo, logWarn } from '../../utils/logger.js';
 
-const sharedLLMAnalyzer = new LLMSecretAnalyzer(createLLMProvider());
+const sharedLLMProvider = createLLMProvider();
+const sharedLLMAnalyzer = new LLMSecretAnalyzer(sharedLLMProvider);
+const sharedFindingLLMAnalyzer = new LLMFindingAnalyzer(sharedLLMProvider);
 
-export async function analyzeJavaScript(input: { url?: string; content: string; mode?: AnalyzeMode; llmAnalyzer?: LLMSecretAnalyzer }): Promise<AnalysisResponse> {
+export async function analyzeJavaScript(input: {
+  url?: string;
+  content: string;
+  mode?: AnalyzeMode;
+  llmAnalyzer?: LLMSecretAnalyzer;
+  findingLlmAnalyzer?: LLMFindingAnalyzer;
+}): Promise<AnalysisResponse> {
   const startedAt = Date.now();
   try {
     logInfo('analyze_js_start', {
@@ -71,6 +80,11 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
     }
 
     const activeLLMAnalyzer = input.llmAnalyzer ?? sharedLLMAnalyzer;
+    logInfo('analyze_js_llm_runtime', {
+      url: input.url,
+      mode: input.mode ?? 'full',
+      ...activeLLMAnalyzer.runtimeStatus(),
+    });
     const secretExtraction = await analyzeSecrets(ast, input.content, apiExtraction.apis, input.mode ?? 'full', activeLLMAnalyzer, {
       astFallbackUsed: parsed.fallbackUsed,
     });
@@ -88,11 +102,12 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       secrets: secretExtraction.secrets,
       requireConfirmedSecrets: (input.mode ?? 'full') === 'full' && secretExtraction.llm.enabled,
     });
+    const findingReview = await (input.findingLlmAnalyzer ?? sharedFindingLLMAnalyzer).reviewFindings(findings, input.mode ?? 'full');
     const groups = groupFindings({
       apis: apiExtraction.apis,
       assets,
       secrets: secretExtraction.secrets,
-      findings,
+      findings: findingReview.findings,
     });
 
     const response: AnalysisResponse = {
@@ -104,13 +119,19 @@ export async function analyzeJavaScript(input: { url?: string; content: string; 
       auth: apiExtraction.auth,
       secrets: secretExtraction.secrets,
       risk,
-      findings,
+      findings: findingReview.findings,
       groups,
       meta: {
         analysis: {
           llm: {
             ...secretExtraction.llm,
             batchSize: 10,
+            findingCandidateCount: findingReview.stats.candidateCount,
+            findingReviewedCount: findingReview.stats.reviewedCount,
+            findingConfirmedCount: findingReview.stats.confirmedCount,
+            findingRejectedCount: findingReview.stats.rejectedCount,
+            findingDroppedCount: findingReview.stats.droppedCount,
+            findingBatchCount: findingReview.stats.batchCount,
           },
         },
       },

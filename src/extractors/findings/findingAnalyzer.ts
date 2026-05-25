@@ -32,15 +32,15 @@ const stringRules: FindingRule[] = [
   { category: '内网信息', type: 'private-ip-or-host', severity: 'medium', confidence: 0.85, valuePattern: /(?:https?:\/\/)?(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|127\.0\.0\.1|localhost|\.local\b|\.corp\b|\.internal\b)/i },
   { category: '业务敏感', type: 'phone-id-card-field', severity: 'medium', confidence: 0.7, valuePattern: /(?:phone|mobile|tel|idCard|identity|身份证|手机号)/i, namePattern: /phone|mobile|tel|idCard|identity|certNo|cardNo|身份证|手机号/i },
   { category: '加密逻辑', type: 'crypto-key-iv', severity: 'medium', confidence: 0.75, valuePattern: /(?:AES|RSA|DES|CBC|ECB|PKCS|encrypt|decrypt|publicKey|privateKey|-----BEGIN)/i, namePattern: /aes|rsa|encrypt|decrypt|cryptoKey|aesKey|rsaKey|publicKey|privateKey|(^|_)iv($|_)/i },
-  { category: 'SSRF/RCE点', type: 'dynamic-url', severity: 'high', confidence: 0.65, namePattern: /callbackUrl|redirectUrl|targetUrl|url|uri|endpoint|webhook/i },
+  { category: '路由信息', type: 'dynamic-request-target', severity: 'medium', confidence: 0.55, namePattern: /callbackUrl|redirectUrl|targetUrl|returnUrl|nextUrl|webhook/i },
   { category: 'JWT/OAuth', type: 'jwt-oauth', severity: 'high', confidence: 0.8, valuePattern: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|oauth|client_secret|client_id|authorization_code/i, namePattern: /jwt|oauth|clientSecret|clientId|authorization/i },
   { category: 'GraphQL', type: 'graphql', severity: 'medium', confidence: 0.75, valuePattern: /\/graphql\b|query\s+\w*\s*\{|mutation\s+\w*\s*\{|__schema|gql`/i, namePattern: /graphql|gql|query|mutation/i },
   { category: '路由信息', type: 'sensitive-route', severity: 'medium', confidence: 0.7, valuePattern: /\/(?:admin|debug|internal|manage|system|console|actuator)(?:\/|$|\?)/i, namePattern: /admin|debug|internal|manage|system|console|actuator/i },
 ];
 
 const callRules: FindingRule[] = [
-  { category: 'SSRF/RCE点', type: 'command-execution', severity: 'high', confidence: 0.85, valuePattern: /\b(?:eval|Function|exec|execSync|spawn|spawnSync|system|popen|child_process\.exec|child_process\.spawn)\b/ },
-  { category: 'SSRF/RCE点', type: 'dynamic-network-request', severity: 'high', confidence: 0.7, valuePattern: /\b(?:fetch|XMLHttpRequest|axios|request|http\.get|https\.get)\b/ },
+  { category: 'SSRF/RCE点', type: 'client-code-execution', severity: 'high', confidence: 0.8, valuePattern: /\b(?:eval|Function|setTimeout|setInterval)\b/ },
+  { category: 'SSRF/RCE点', type: 'node-command-execution', severity: 'high', confidence: 0.9, valuePattern: /\b(?:exec|execSync|spawn|spawnSync|system|popen|child_process\.exec|child_process\.spawn)\b/ },
   { category: 'GraphQL', type: 'graphql-client-call', severity: 'medium', confidence: 0.75, valuePattern: /\b(?:graphql|gql|ApolloClient|useQuery|useMutation)\b/i },
   { category: '加密逻辑', type: 'crypto-call', severity: 'medium', confidence: 0.75, valuePattern: /\b(?:encrypt|decrypt|createCipher|createDecipher|CryptoJS|JSEncrypt|RSA|AES)\b/i },
 ];
@@ -165,12 +165,12 @@ export function analyzeFindings(input: {
       }
       const name = calleeName(path.node.callee);
       pushFindings(matchCallRules(name));
-      if (isDynamicUrlCall(path.node)) {
+      if (isDynamicExternalRequestCall(path.node)) {
         pushFindings([{
-          category: 'SSRF/RCE点',
-          type: 'dynamic-url',
-          severity: 'high',
-          confidence: 0.65,
+          category: '路由信息',
+          type: 'dynamic-request-target',
+          severity: 'medium',
+          confidence: 0.55,
           source: 'call',
           evidence: contextAround(lines, path.node.loc?.start.line) ?? `call:${name}`,
         }]);
@@ -280,18 +280,42 @@ function categoryForRisk(type: string): string {
     return '路由信息';
   }
   if (/destructive/i.test(type)) {
-    return 'SSRF/RCE点';
+    return '路由信息';
   }
   return 'API 信息';
 }
 
-function isDynamicUrlCall(node: t.CallExpression): boolean {
+function isDynamicExternalRequestCall(node: t.CallExpression): boolean {
   const name = calleeName(node.callee);
   if (!/fetch|axios|request|open/i.test(name)) {
     return false;
   }
   const firstArg = node.arguments[0];
-  return Boolean(firstArg && !t.isStringLiteral(firstArg) && !t.isObjectExpression(firstArg));
+  if (!firstArg || t.isStringLiteral(firstArg) || t.isObjectExpression(firstArg)) {
+    return false;
+  }
+
+  const text = expressionText(firstArg);
+  return /callback|redirect|returnurl|nexturl|target|webhook|location\.|document\.url|window\.name|searchParams|query/i.test(text);
+}
+
+function expressionText(node: t.Node): string {
+  if (t.isIdentifier(node)) {
+    return node.name;
+  }
+  if (t.isMemberExpression(node)) {
+    return calleeName(node);
+  }
+  if (t.isCallExpression(node)) {
+    return calleeName(node.callee);
+  }
+  if (t.isTemplateLiteral(node)) {
+    return node.quasis.map((quasi) => quasi.value.raw).join('${value}');
+  }
+  if (t.isBinaryExpression(node)) {
+    return `${expressionText(node.left)} ${expressionText(node.right)}`;
+  }
+  return node.type;
 }
 
 function evidenceForApi(content: string, lines: string[], api: ApiResult): string | undefined {

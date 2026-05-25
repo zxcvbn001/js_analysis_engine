@@ -308,6 +308,9 @@ function testConfig(options?: { authEnabled?: boolean; logDir?: string }): AppCo
       apiKey: '',
       baseUrl: 'https://api.deepseek.com',
       timeoutMs: 8000,
+      logPrompts: true,
+      logResponses: true,
+      logRawPayloads: false,
     },
   };
 }

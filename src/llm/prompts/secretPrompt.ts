@@ -1,4 +1,5 @@
 import type { SecretContext } from '../../types/llm.js';
+import type { FindingReviewContext } from '../../types/llm.js';
 
 export function buildSecretPrompt(input: SecretContext): string {
   return [
@@ -45,6 +46,32 @@ export function buildSecretBatchPrompt(input: SecretContext[]): string {
         nearbyApis: context.nearbyApis,
         nearbyHeaders: context.nearbyHeaders,
         context: context.context,
+      })),
+      null,
+      2,
+    ),
+  ].join('\n');
+}
+
+export function buildFindingBatchPrompt(input: FindingReviewContext[]): string {
+  return [
+    'You are a JavaScript security analysis expert.',
+    'Review each finding and decide whether it is truly the claimed security risk category/type.',
+    'Return JSON only with key: results.',
+    'results must be an array. Each item must contain: id, is_risk, category, type, severity, confidence, reason.',
+    'If a finding is a false positive or does not match the claimed risk category/type, set is_risk=false.',
+    '',
+    'Findings:',
+    JSON.stringify(
+      input.map((context) => ({
+        id: context.id,
+        category: context.finding.category,
+        type: context.finding.type,
+        value: context.finding.value,
+        severity: context.finding.severity,
+        confidence: context.finding.confidence,
+        source: context.finding.source,
+        evidence: context.finding.evidence,
       })),
       null,
       2,

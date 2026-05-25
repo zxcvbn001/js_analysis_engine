@@ -34,6 +34,12 @@ export interface AnalysisLogSummary {
   llmRejectedCount: number;
   llmBatchCount: number;
   llmBatchSize: number;
+  llmFindingCandidateCount: number;
+  llmFindingReviewedCount: number;
+  llmFindingConfirmedCount: number;
+  llmFindingRejectedCount: number;
+  llmFindingDroppedCount: number;
+  llmFindingBatchCount: number;
 }
 
 export function summarizeContent(input: { content: string; source: 'content' | 'download'; url?: string }): ContentSummary {
@@ -72,6 +78,12 @@ export function summarizeAnalysis(result: AnalysisResult): AnalysisLogSummary {
     llmRejectedCount: result.meta.analysis.llm.rejectedCount,
     llmBatchCount: result.meta.analysis.llm.batchCount,
     llmBatchSize: result.meta.analysis.llm.batchSize,
+    llmFindingCandidateCount: result.meta.analysis.llm.findingCandidateCount,
+    llmFindingReviewedCount: result.meta.analysis.llm.findingReviewedCount,
+    llmFindingConfirmedCount: result.meta.analysis.llm.findingConfirmedCount,
+    llmFindingRejectedCount: result.meta.analysis.llm.findingRejectedCount,
+    llmFindingDroppedCount: result.meta.analysis.llm.findingDroppedCount,
+    llmFindingBatchCount: result.meta.analysis.llm.findingBatchCount,
   };
 }
 

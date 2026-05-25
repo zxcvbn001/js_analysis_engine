@@ -3,8 +3,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { configureFileLogger } from '../utils/logger.js';
 import { analyzeJavaScript } from '../engine/analyzers/javascriptAnalyzer.js';
+import { LLMFindingAnalyzer } from '../llm/analyzers/llmFindingAnalyzer.js';
 import { LLMSecretAnalyzer } from '../llm/analyzers/llmSecretAnalyzer.js';
 import type { LLMProvider } from '../types/llm.js';
+import { DeepSeekProvider } from '../llm/providers/deepSeekProvider.js';
 
 describe('secret detection', () => {
   afterEach(() => {
@@ -108,6 +110,7 @@ describe('secret detection', () => {
         const redirectUrl = query.nextUrl;
         const q = gql\`query User { user { id phone } }\`;
         fetch('/graphql', { method: 'POST', body: q });
+        fetch(redirectUrl);
         eval(window.name);
       `,
     });
@@ -157,12 +160,59 @@ describe('secret detection', () => {
     }
 
     expect(result.findings.length).toBeLessThanOrEqual(1000);
-    expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'command-execution')).toBe(true);
+    expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'client-code-execution')).toBe(true);
     expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'token')).toBe(true);
     expect(result.findings.some((finding) => finding.type === 'access-key')).toBe(true);
 
     const adminRouteFindings = result.findings.filter((finding) => finding.type === 'sensitive-route' && finding.value === '/admin/panel');
     expect(adminRouteFindings.length).toBeLessThan(20);
+  });
+
+  it('does not classify normal frontend HTTP clients as SSRF/RCE', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        fetch('/api/user');
+        axios.post('/api/order/deletePreview', { id });
+        const serviceUrl = '/api/service';
+        request({ url: serviceUrl, method: 'get' });
+        const adminLabel = 'admin user';
+      `,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.findings.some((finding) => finding.category === 'SSRF/RCE点')).toBe(false);
+    expect(result.risk.some((risk) => risk.type === 'admin-api' && risk.evidence === 'variable:adminLabel')).toBe(false);
+  });
+
+  it('flags frontend-controllable dynamic request targets without calling them SSRF/RCE', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        const redirectUrl = new URLSearchParams(location.search).get('next');
+        fetch(redirectUrl);
+      `,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: '路由信息',
+          type: 'dynamic-request-target',
+          severity: 'medium',
+        }),
+      ]),
+    );
+    expect(result.findings.some((finding) => finding.category === 'SSRF/RCE点')).toBe(false);
   });
 
   it('filters sensitive findings to LLM-confirmed results in full mode', async () => {
@@ -304,5 +354,145 @@ describe('secret detection', () => {
     expect(logText).toContain('llm_secret_batch_completed');
     expect(logText).toContain('candidateId');
     expect(logText).toContain('contextLength');
+  });
+
+  it('logs why LLM review is not requested', async () => {
+    configureFileLogger({ fileEnabled: true, directory: 'tmp-test-llm-logs', level: 'info' });
+
+    const result = await analyzeJavaScript({
+      content: "fetch('/api/no-secret-candidates')",
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer({
+        async analyzeSecret() {
+          throw new Error('should not be called');
+        },
+        async analyzeSecretsBatch() {
+          throw new Error('should not be called');
+        },
+      }),
+    });
+
+    expect(result.success).toBe(true);
+    const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('analyze_js_llm_runtime');
+    expect(logText).toContain('llm_secret_analysis_decision');
+    expect(logText).toContain('llm_secret_review_not_requested');
+    expect(logText).toContain('no secret candidates');
+  });
+
+  it('writes detailed provider prompt and response logs with redaction', async () => {
+    configureFileLogger({ fileEnabled: true, directory: 'tmp-test-llm-logs', level: 'info' });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              results: [{
+                id: 'unused',
+                is_secret: true,
+                secret_type: 'bearer-token',
+                severity: 'high',
+                confidence: 0.9,
+                reason: 'confirmed',
+              }],
+            }),
+          },
+        }],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+
+    try {
+      const provider = new DeepSeekProvider({
+        apiKey: 'test-key',
+        baseUrl: 'https://llm.example',
+        model: 'deepseek-test',
+        timeoutMs: 8000,
+        logPrompts: true,
+        logResponses: true,
+        logRawPayloads: false,
+      });
+
+      await provider.analyzeSecretsBatch([{
+        candidate: {
+          id: 'candidate-1',
+          type: 'bearer-token',
+          value: 'Bearer abcdefghijklmnopqrstuvwxyz12345',
+          severity: 'high',
+          evidence: 'token=Bearer abcdefghijklmnopqrstuvwxyz12345',
+        },
+        context: "const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';",
+        nearbyApis: ['/api/user'],
+        nearbyHeaders: ['Authorization'],
+      }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('llm_provider_prompt_built');
+    expect(logText).toContain('llm_provider_request_start');
+    expect(logText).toContain('llm_provider_response_body_received');
+    expect(logText).toContain('llm_provider_response_parsed');
+    expect(logText).toContain('promptPreview');
+    expect(logText).toContain('responsePreview');
+    expect(logText).toContain('Bearer [REDACTED]');
+    expect(logText).not.toContain('Bearer abcdefghijklmnopqrstuvwxyz12345');
+  });
+
+  it('reviews all findings with LLM in full mode and drops rejected findings', async () => {
+    const reviewedTypes: string[] = [];
+    const provider: LLMProvider = {
+      async analyzeSecret() {
+        throw new Error('secret path should not be used');
+      },
+      async analyzeSecretsBatch() {
+        return [];
+      },
+      async analyzeFindingsBatch(input) {
+        reviewedTypes.push(...input.map((context) => context.finding.type));
+        return input.map((context) => ({
+          id: context.id,
+          is_risk: context.finding.type === 'api-endpoint',
+          category: context.finding.category,
+          type: context.finding.type,
+          severity: context.finding.severity,
+          confidence: context.finding.type === 'api-endpoint' ? 0.91 : 0.05,
+          reason: context.finding.type === 'api-endpoint' ? 'confirmed API exposure' : 'false positive',
+        }));
+      },
+    };
+
+    const result = await analyzeJavaScript({
+      content: `
+        fetch('/api/confirmed');
+        const adminPath = '/admin/panel';
+      `,
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer(provider),
+      findingLlmAnalyzer: new LLMFindingAnalyzer(provider),
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(reviewedTypes.length).toBeGreaterThan(1);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        type: 'api-endpoint',
+        source: 'llm',
+        confidence: 0.91,
+        llmReview: expect.objectContaining({ confirmed: true, reason: 'confirmed API exposure' }),
+      }),
+    ]);
+    expect(result.meta.analysis.llm.findingCandidateCount).toBe(reviewedTypes.length);
+    expect(result.meta.analysis.llm.findingReviewedCount).toBe(reviewedTypes.length);
+    expect(result.meta.analysis.llm.findingConfirmedCount).toBe(1);
+    expect(result.meta.analysis.llm.findingRejectedCount).toBe(reviewedTypes.length - 1);
   });
 });

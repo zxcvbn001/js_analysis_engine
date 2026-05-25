@@ -139,6 +139,13 @@ export class LLMSecretAnalyzer {
     return Boolean(this.provider);
   }
 
+  runtimeStatus(): { enabled: boolean; supportsBatch: boolean } {
+    return {
+      enabled: Boolean(this.provider),
+      supportsBatch: Boolean(this.provider?.analyzeSecretsBatch),
+    };
+  }
+
   enqueue(context: SecretContext): boolean {
     if (!this.provider) {
       return false;

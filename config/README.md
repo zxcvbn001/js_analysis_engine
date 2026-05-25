@@ -33,7 +33,13 @@ LLM_MODEL=deepseek-v4-flash
 LLM_API_KEY=your-secret-key
 LLM_BASE_URL=https://api.deepseek.com
 LLM_TIMEOUT_MS=8000
+LLM_LOG_PROMPTS=true
+LLM_LOG_RESPONSES=true
+LLM_LOG_RAW_PAYLOADS=false
 ```
+
+LLM prompt/response logs are redacted by default. Set `LLM_LOG_RAW_PAYLOADS=true`
+only for short-term debugging because raw prompts can contain sensitive code context.
 
 When `auth.enabled` is true, all analysis APIs require the configured API key header.
 `GET /health` remains unauthenticated for health checks.
