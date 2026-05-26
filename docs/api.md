@@ -544,7 +544,7 @@ high
 
 ```text
 risk    可从 findings 中查看统一风险结果
-groups  可由调用方按 findings.category/source 自行分组
+groups  可由调用方按与 full 模式相同的规则自行分组
 meta    压缩为 summary.llm 和各类 count
 ```
 
@@ -584,6 +584,19 @@ risk
 llm
 ```
 
+`findings[].source` 只表示“这条 finding 的证据来源”，不是最终展示分组字段。例如：
+
+```text
+api         来自真实发包点、接口 URL、接口参数、接口头
+asset       来自静态资源/webpack chunk
+secret      来自 Secret 规则结果映射
+risk        来自 risk 分析器映射
+string      来自 AST 字符串字面量规则命中
+identifier  来自变量名、属性名规则命中
+call        来自函数调用规则命中
+llm         来自 LLM 复核后保留下来的 finding
+```
+
 `findings[].llmReview` 只在 LLM 研判参与后出现。`confirmed=true` 表示 LLM 确认该 finding 属于对应风险；如果某个 LLM 批次失败，原规则 finding 会被保留，并带有 `confirmed=false` 和失败原因。LLM 明确判定为误报的 findings 不会出现在最终 `findings` 中。
 
 建议 Burp 展示时以 `findings` 做总览和分类筛选，以 `apis/assets/secrets/risk` 做详情面板。
@@ -595,6 +608,21 @@ groups.endpoints  API/endpoint 类，包括真实发包点 apis 和 API 信息 f
 groups.exposures  信息泄露/风险线索类，包括 secrets 和敏感凭据、权限、云配置、内网、GraphQL、SSRF/RCE 等 findings
 groups.scripts    webpack/script 类，包括 assets 和 webpack 模块 findings
 ```
+
+`groups` 才是服务端给出的最终展示分组结果，不是单纯按 `source=api/secret/risk/string` 直接切分，而是按下面规则综合判断：
+
+```text
+groups.endpoints
+  包含 apis，以及 source=api 或 category=API 信息 的 findings
+
+groups.scripts
+  包含 assets，以及 source=asset 或 category=webpack模块 的 findings
+
+groups.exposures
+  包含 secrets，以及剩余属于暴露/风险类分类的 findings，例如敏感凭据、云配置、JWT/OAuth、路由信息等
+```
+
+如果使用 `response_mode=compact`，响应里虽然不直接返回 `groups`，但 `summary.endpointCount`、`summary.exposureCount`、`summary.scriptCount` 仍然基于这套规则计算。
 
 这三个分组是为了前端展示和 Burp 对接方便；原始明细仍保留在 `apis`、`assets`、`secrets`、`risk`、`findings` 中。
 
