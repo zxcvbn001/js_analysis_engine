@@ -373,6 +373,10 @@ function testConfig(options?: { authEnabled?: boolean; logDir?: string }): AppCo
       logPrompts: true,
       logResponses: true,
       logRawPayloads: false,
+      reviewSecrets: true,
+      reviewFindings: true,
+      allowedSecretTypes: [],
+      allowedFindingCategories: [],
     },
   };
 }
