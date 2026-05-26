@@ -17,6 +17,10 @@ export interface LogFields {
   [key: string]: unknown;
 }
 
+export interface LogStream {
+  write(message: string): void;
+}
+
 export function logDebug(message: string, fields: LogFields = {}): void {
   writeLog('debug', message, fields);
 }
@@ -48,12 +52,13 @@ function writeLog(level: LogLevel, message: string, fields: LogFields): void {
 
   const now = new Date();
   const fileName = `${now.toISOString().slice(0, 10)}.log`;
-  const line = JSON.stringify({
+  const payload = {
     time: now.toISOString(),
     level,
     message,
     ...fields,
-  });
+  };
+  const line = formatLogLine(payload);
 
   appendFileSync(resolve(directory, fileName), `${line}\n`, 'utf8');
 }
@@ -81,4 +86,142 @@ function formatCause(cause: unknown): unknown {
     };
   }
   return cause;
+}
+
+export function createPinoConsoleStream(output: NodeJS.WritableStream = process.stdout): LogStream {
+  return {
+    write(message: string): void {
+      const line = formatPinoLine(message);
+      if (!line) {
+        return;
+      }
+      output.write(`${line}\n`);
+    },
+  };
+}
+
+function formatLogLine(payload: { time: string; level: LogLevel; message: string; [key: string]: unknown }): string {
+  const prefix = `[${payload.level.toUpperCase()}] ${payload.time} ${payload.message}`;
+  const fieldEntries = Object.entries(payload).filter(([key]) => !['time', 'level', 'message'].includes(key));
+  if (fieldEntries.length === 0) {
+    return prefix;
+  }
+
+  return `${prefix} ${fieldEntries.map(([key, value]) => `${key}=${formatValue(value)}`).join(' ')}`;
+}
+
+function formatValue(value: unknown): string {
+  if (value === undefined) {
+    return 'undefined';
+  }
+  if (value === null) {
+    return 'null';
+  }
+  if (typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function formatPinoLine(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    return formatLogLine(normalizePinoPayload(parsed));
+  } catch {
+    return trimmed;
+  }
+}
+
+function normalizePinoPayload(payload: Record<string, unknown>): { time: string; level: LogLevel; message: string; [key: string]: unknown } {
+  const normalized: { time: string; level: LogLevel; message: string; [key: string]: unknown } = {
+    time: normalizePinoTime(payload.time),
+    level: normalizePinoLevel(payload.level),
+    message: typeof payload.msg === 'string' ? payload.msg : typeof payload.message === 'string' ? payload.message : 'log',
+  };
+
+  if (typeof payload.reqId === 'string') {
+    normalized.reqId = payload.reqId;
+  }
+
+  if (isObject(payload.req)) {
+    const req = payload.req as Record<string, unknown>;
+    normalized.method = req.method;
+    normalized.url = req.url;
+    normalized.host = req.host;
+    normalized.remoteAddress = req.remoteAddress;
+    normalized.remotePort = req.remotePort;
+  }
+
+  if (isObject(payload.res)) {
+    const res = payload.res as Record<string, unknown>;
+    normalized.statusCode = res.statusCode;
+  }
+
+  if (typeof payload.responseTime === 'number') {
+    normalized.responseTimeMs = Number(payload.responseTime.toFixed(2));
+  }
+
+  if (isObject(payload.err)) {
+    const err = payload.err as Record<string, unknown>;
+    normalized.errorName = err.type;
+    normalized.errorMessage = err.message;
+    normalized.errorStack = err.stack;
+  }
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (['level', 'time', 'pid', 'hostname', 'msg', 'message', 'v', 'reqId', 'req', 'res', 'responseTime', 'err'].includes(key)) {
+      continue;
+    }
+    normalized[key] = value;
+  }
+
+  return normalized;
+}
+
+function normalizePinoLevel(level: unknown): LogLevel {
+  if (typeof level === 'string') {
+    if (level === 'debug' || level === 'info' || level === 'warn' || level === 'error') {
+      return level;
+    }
+    if (level === 'fatal') {
+      return 'error';
+    }
+  }
+
+  if (typeof level === 'number') {
+    if (level >= 50) {
+      return 'error';
+    }
+    if (level >= 40) {
+      return 'warn';
+    }
+    if (level >= 30) {
+      return 'info';
+    }
+    return 'debug';
+  }
+
+  return 'info';
+}
+
+function normalizePinoTime(value: unknown): string {
+  if (typeof value === 'number') {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === 'string' && value) {
+    return value;
+  }
+  return new Date().toISOString();
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

@@ -136,6 +136,7 @@ describe('http api', () => {
     expect(response.statusCode).toBe(200);
     const logFile = join(process.cwd(), 'tmp-test-logs', `${new Date().toISOString().slice(0, 10)}.log`);
     const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('[INFO]');
     expect(logText).toContain('analyze_js_request_received');
     expect(logText).toContain('analyze_js_content_prepared');
     expect(logText).toContain('analyze_js_success');

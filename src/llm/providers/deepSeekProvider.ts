@@ -1,7 +1,7 @@
 import type { FindingReviewContext, LLMFindingReviewResult, LLMProvider, LLMSecretBatchResult, LLMSecretResult, LLMUnifiedReviewResult, SecretContext, UnifiedReviewContext } from '../../types/llm.js';
 import { getConfig } from '../../config/appConfig.js';
 import { errorFields, logError, logInfo } from '../../utils/logger.js';
-import { buildFindingBatchPrompt, buildSecretBatchPrompt, buildSecretPrompt, buildUnifiedReviewPrompt } from '../prompts/secretPrompt.js';
+import { buildFindingBatchPrompt, buildSecretBatchPrompt, buildSecretPrompt, buildUnifiedReviewPrompt, toCompactUnifiedPromptPayload } from '../prompts/secretPrompt.js';
 
 export interface DeepSeekProviderOptions {
   apiKey: string;
@@ -59,6 +59,7 @@ export class DeepSeekProvider implements LLMProvider {
   }
 
   async analyzeUnifiedBatch(input: UnifiedReviewContext): Promise<LLMUnifiedReviewResult> {
+    const promptPayload = toCompactUnifiedPromptPayload(input);
     const content = await this.completeJson(buildUnifiedReviewPrompt(input), {
       operation: 'unified-batch',
       candidateCount: input.secrets.length + input.findings.length,
@@ -66,6 +67,16 @@ export class DeepSeekProvider implements LLMProvider {
         ...input.secrets.map((context) => context.candidate.id),
         ...input.findings.map((context) => context.id),
       ],
+      promptStats: {
+        apiCount: input.apis.length,
+        secretCount: input.secrets.length,
+        findingCount: input.findings.length,
+        apiChars: JSON.stringify(promptPayload.apis ?? []).length,
+        secretValueChars: input.secrets.reduce((total, context) => total + context.candidate.value.length, 0),
+        secretEvidenceChars: JSON.stringify(promptPayload.secrets ?? []).length,
+        findingValueChars: input.findings.reduce((total, context) => total + (context.finding.value?.length ?? 0), 0),
+        findingEvidenceChars: JSON.stringify(promptPayload.findings ?? []).length,
+      },
     });
     const payload = JSON.parse(content) as { secrets?: unknown[]; findings?: unknown[] };
     return {
@@ -74,7 +85,7 @@ export class DeepSeekProvider implements LLMProvider {
     };
   }
 
-  private async completeJson(prompt: string, meta: { operation: string; candidateCount: number; candidateIds: string[] }): Promise<string> {
+  private async completeJson(prompt: string, meta: { operation: string; candidateCount: number; candidateIds: string[]; promptStats?: Record<string, number> }): Promise<string> {
     if (!this.options.apiKey) {
       logError('llm_provider_request_blocked', {
         provider: 'deepseek',
@@ -104,6 +115,7 @@ export class DeepSeekProvider implements LLMProvider {
         candidateCount: meta.candidateCount,
         candidateIds: meta.candidateIds,
         promptLength: prompt.length,
+        promptStats: meta.promptStats,
         promptPreview: this.options.logPrompts ? redactLLMText(prompt) : undefined,
         promptRaw: this.options.logPrompts && this.options.logRawPayloads ? prompt : undefined,
       });
@@ -117,6 +129,7 @@ export class DeepSeekProvider implements LLMProvider {
         candidateCount: meta.candidateCount,
         candidateIds: meta.candidateIds,
         promptLength: prompt.length,
+        promptStats: meta.promptStats,
         requestBodyLength: JSON.stringify(requestBody).length,
         requestBodyPreview: this.options.logPrompts ? redactLLMText(JSON.stringify(requestBody)) : undefined,
         requestBodyRaw: this.options.logPrompts && this.options.logRawPayloads ? requestBody : undefined,

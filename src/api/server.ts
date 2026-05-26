@@ -3,14 +3,17 @@ import { registerAnalyzeRoutes } from './routes/analyzeRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { getConfig, type AppConfig } from '../config/appConfig.js';
 import { createApiKeyAuth } from './middleware/apiKeyAuth.js';
-import { configureFileLogger } from '../utils/logger.js';
+import { configureFileLogger, createPinoConsoleStream } from '../utils/logger.js';
 
 export async function buildServer(config: AppConfig = getConfig()) {
   configureFileLogger(config.logging);
   const app = Fastify({
-    logger: {
-      level: config.server.logLevel,
-    },
+    logger: config.server.logLevel === 'silent'
+      ? false
+      : {
+          level: config.server.logLevel,
+          stream: createPinoConsoleStream(),
+        },
     bodyLimit: config.server.bodyLimitMb * 1024 * 1024,
   });
 

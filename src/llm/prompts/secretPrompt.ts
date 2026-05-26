@@ -87,30 +87,39 @@ export function buildUnifiedReviewPrompt(input: UnifiedReviewContext): string {
     'Reject false positives. Do not classify normal frontend HTTP calls as SSRF/RCE unless there is evidence of attacker-controlled server-side fetching or dangerous code execution.',
     '',
     'Input:',
-    JSON.stringify({
-      apis: input.apis.slice(0, 80),
-      secrets: input.secrets.map((context) => ({
-        id: context.candidate.id,
-        type: context.candidate.type,
-        value: trimForPrompt(context.candidate.value, 300),
-        evidence: trimForPrompt(context.candidate.evidence, 500),
-        variableName: context.candidate.variableName,
-        nearbyApis: context.nearbyApis.slice(0, 8),
-        nearbyHeaders: context.nearbyHeaders.slice(0, 8),
-        context: trimForPrompt(context.context, 1200),
-      })),
-      findings: input.findings.map((context) => ({
-        id: context.id,
-        category: context.finding.category,
-        type: context.finding.type,
-        value: trimForPrompt(context.finding.value, 400),
-        severity: context.finding.severity,
-        confidence: context.finding.confidence,
-        source: context.finding.source,
-        evidence: trimForPrompt(context.finding.evidence, 800),
-      })),
-    }),
+    JSON.stringify(toCompactUnifiedPromptPayload(input)),
   ].join('\n');
+}
+
+export function toCompactUnifiedPromptPayload(input: UnifiedReviewContext): Record<string, unknown> {
+  return {
+    apis: input.apis.slice(0, 8).map((api) => ({
+      url: trimForPrompt(api.url, 80),
+      method: api.method,
+      params: api.params?.slice(0, 3),
+      headers: api.headers?.slice(0, 3),
+    })),
+    secrets: input.secrets.map((context) => ({
+      id: context.candidate.id,
+      type: context.candidate.type,
+      value: trimForPrompt(context.candidate.value, 100),
+      evidence: trimForPrompt(context.candidate.evidence, 100),
+      variableName: context.candidate.variableName,
+      nearbyApis: context.nearbyApis.slice(0, 2).map((api) => trimForPrompt(api, 60)),
+      nearbyHeaders: context.nearbyHeaders.slice(0, 3),
+      context: trimForPrompt(context.context, 160),
+    })),
+    findings: input.findings.map((context) => ({
+      id: context.id,
+      category: context.finding.category,
+      type: context.finding.type,
+      value: trimForPrompt(context.finding.value, 80),
+      severity: context.finding.severity,
+      confidence: context.finding.confidence,
+      source: context.finding.source,
+      evidence: trimForPrompt(context.finding.evidence, 100),
+    })),
+  };
 }
 
 function trimForPrompt(value: string | undefined, maxLength: number): string | undefined {

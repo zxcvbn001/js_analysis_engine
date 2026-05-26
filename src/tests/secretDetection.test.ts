@@ -541,10 +541,82 @@ describe('secret detection', () => {
     expect(logText).toContain('llm_provider_request_start');
     expect(logText).toContain('llm_provider_response_body_received');
     expect(logText).toContain('llm_provider_response_parsed');
+    expect(logText).toContain('[INFO]');
     expect(logText).toContain('promptPreview');
     expect(logText).toContain('responsePreview');
     expect(logText).toContain('Bearer [REDACTED]');
     expect(logText).not.toContain('Bearer abcdefghijklmnopqrstuvwxyz12345');
+  });
+
+  it('keeps unified review prompts compact enough for batch review', async () => {
+    configureFileLogger({ fileEnabled: true, directory: 'tmp-test-llm-logs', level: 'info' });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              secrets: [],
+              findings: [],
+            }),
+          },
+        }],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+
+    try {
+      const provider = new DeepSeekProvider({
+        apiKey: 'test-key',
+        baseUrl: 'https://llm.example',
+        model: 'deepseek-test',
+        timeoutMs: 8000,
+        logPrompts: true,
+        logResponses: true,
+        logRawPayloads: false,
+      });
+
+      await provider.analyzeUnifiedBatch({
+        apis: Array.from({ length: 40 }, (_, index) => ({
+          url: `/api/${index}/${'x'.repeat(100)}`,
+          method: 'POST',
+          params: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+          headers: ['Authorization', 'X-Test', 'X-Trace', 'X-Api-Key', 'X-Role', 'X-Env', 'X-Flag'],
+        })),
+        secrets: [{
+          candidate: {
+            id: 'secret-1',
+            type: 'bearer-token',
+            value: `Bearer ${'a'.repeat(120)}`,
+            severity: 'high',
+            evidence: `const token='Bearer ${'a'.repeat(300)}';`,
+          },
+          context: `const token='Bearer ${'a'.repeat(3000)}';`,
+          nearbyApis: ['/api/user', '/api/admin', '/api/order', '/api/audit', '/api/export'],
+          nearbyHeaders: ['Authorization', 'X-Token', 'JWT', 'Bearer', 'X-Auth'],
+        }],
+        findings: Array.from({ length: 10 }, (_, index) => ({
+          id: `finding-${index}`,
+          finding: {
+            category: 'API 信息',
+            type: 'api-endpoint',
+            value: `/api/${index}/${'y'.repeat(300)}`,
+            severity: 'medium',
+            confidence: 0.8,
+            source: 'api',
+            evidence: `fetch('/api/${index}/${'y'.repeat(1200)}')`,
+          },
+        })),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    const promptLengthMatch = logText.match(/promptLength=(\d+)/);
+    expect(promptLengthMatch).toBeTruthy();
+    expect(Number(promptLengthMatch?.[1] ?? 0)).toBeLessThan(12000);
   });
 
   it('reviews all findings with LLM in full mode and drops rejected findings', async () => {
