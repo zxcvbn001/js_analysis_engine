@@ -1,6 +1,7 @@
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as appConfig from '../config/appConfig.js';
 import { configureFileLogger } from '../utils/logger.js';
 import { analyzeJavaScript } from '../engine/analyzers/javascriptAnalyzer.js';
 import { LLMSecretAnalyzer } from '../llm/analyzers/llmSecretAnalyzer.js';
@@ -603,5 +604,147 @@ describe('secret detection', () => {
     expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'api-endpoint', value: '/api/preserved' })]));
     expect(result.findings.some((finding) => finding.llmReview?.reason.includes('preserved'))).toBe(true);
     expect(result.meta.analysis.llm.findingDroppedCount).toBeGreaterThan(0);
+  });
+
+  it('allows configuring which findings enter LLM review', async () => {
+    vi.spyOn(appConfig, 'getConfig').mockReturnValue({
+      server: { host: '127.0.0.1', port: 0, logLevel: 'silent', bodyLimitMb: 20 },
+      fetch: { timeoutMs: 10000, maxBytes: 10 * 1024 * 1024 },
+      logging: { fileEnabled: false, directory: 'tmp', level: 'info' },
+      auth: { enabled: false, headerName: 'x-api-key', apiKeys: [] },
+      llm: {
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        apiKey: 'test',
+        baseUrl: 'https://llm.example',
+        timeoutMs: 8000,
+        logPrompts: false,
+        logResponses: false,
+        logRawPayloads: false,
+        reviewSecrets: false,
+        reviewFindings: true,
+        allowedSecretTypes: [],
+        allowedFindingCategories: ['API 信息'],
+      },
+    });
+
+    const reviewedCategories: string[] = [];
+    const provider: LLMProvider = {
+      async analyzeSecret() {
+        throw new Error('secret path should not be used');
+      },
+      async analyzeSecretsBatch() {
+        return [];
+      },
+      async analyzeUnifiedBatch(input) {
+        reviewedCategories.push(...input.findings.map((context) => context.finding.category));
+        return {
+          secrets: [],
+          findings: input.findings.map((context) => ({
+            id: context.id,
+            is_risk: true,
+            category: context.finding.category,
+            type: context.finding.type,
+            severity: context.finding.severity,
+            confidence: 0.9,
+            reason: 'configured review',
+          })),
+        };
+      },
+    };
+
+    const result = await analyzeJavaScript({
+      content: `
+        fetch('/api/configured');
+        const adminPath = '/admin/panel';
+      `,
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer(provider),
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(reviewedCategories.length).toBeGreaterThan(0);
+    expect(reviewedCategories.every((category) => category === 'API 信息')).toBe(true);
+    expect(result.meta.analysis.llm.candidateCount).toBe(0);
+    expect(result.meta.analysis.llm.findingCandidateCount).toBe(reviewedCategories.length);
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: 'API 信息', source: 'llm' }),
+      expect.objectContaining({ category: '路由信息' }),
+    ]));
+  });
+
+  it('allows configuring which secret types enter LLM review', async () => {
+    vi.spyOn(appConfig, 'getConfig').mockReturnValue({
+      server: { host: '127.0.0.1', port: 0, logLevel: 'silent', bodyLimitMb: 20 },
+      fetch: { timeoutMs: 10000, maxBytes: 10 * 1024 * 1024 },
+      logging: { fileEnabled: false, directory: 'tmp', level: 'info' },
+      auth: { enabled: false, headerName: 'x-api-key', apiKeys: [] },
+      llm: {
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        apiKey: 'test',
+        baseUrl: 'https://llm.example',
+        timeoutMs: 8000,
+        logPrompts: false,
+        logResponses: false,
+        logRawPayloads: false,
+        reviewSecrets: true,
+        reviewFindings: false,
+        allowedSecretTypes: ['bearer-token'],
+        allowedFindingCategories: [],
+      },
+    });
+
+    const reviewedSecretTypes: string[] = [];
+    const provider: LLMProvider = {
+      async analyzeSecret() {
+        throw new Error('secret path should not be used');
+      },
+      async analyzeSecretsBatch() {
+        return [];
+      },
+      async analyzeUnifiedBatch(input) {
+        reviewedSecretTypes.push(...input.secrets.map((context) => context.candidate.type));
+        return {
+          secrets: input.secrets.map((context) => ({
+            id: context.candidate.id,
+            is_secret: true,
+            secret_type: context.candidate.type,
+            severity: 'high',
+            confidence: 0.99,
+            reason: 'configured secret review',
+          })),
+          findings: [],
+        };
+      },
+    };
+
+    const result = await analyzeJavaScript({
+      content: `
+        const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';
+        const password = 'admin123456';
+      `,
+      mode: 'full',
+      llmAnalyzer: new LLMSecretAnalyzer(provider),
+      unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(reviewedSecretTypes).toEqual(['bearer-token']);
+    expect(result.meta.analysis.llm.candidateCount).toBe(1);
+    expect(result.secrets.some((secret) => secret.type === 'bearer-token' && secret.source === 'llm+regex')).toBe(true);
+    expect(result.secrets.some((secret) => secret.source === 'regex')).toBe(true);
+    expect(result.secrets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'bearer-token', source: 'llm+regex' }),
+    ]));
   });
 });

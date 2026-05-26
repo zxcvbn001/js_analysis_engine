@@ -1,6 +1,6 @@
 # Configuration
 
-Copy `config.example.json` to `config/config.json` for local or production configuration.
+Copy `config/config.example.json` to `config/config.json` for local or production configuration.
 
 `config/config.json` is ignored by git because it can contain API keys.
 
@@ -36,10 +36,30 @@ LLM_TIMEOUT_MS=30000
 LLM_LOG_PROMPTS=true
 LLM_LOG_RESPONSES=true
 LLM_LOG_RAW_PAYLOADS=false
+LLM_REVIEW_SECRETS=true
+LLM_REVIEW_FINDINGS=true
+LLM_ALLOWED_SECRET_TYPES=bearer-token,aws-key
+LLM_ALLOWED_FINDING_CATEGORIES=敏感凭据,云配置,JWT/OAuth
 ```
 
 LLM prompt/response logs are redacted by default. Set `LLM_LOG_RAW_PAYLOADS=true`
 only for short-term debugging because raw prompts can contain sensitive code context.
+
+LLM review scope can be narrowed to reduce timeout risk:
+
+```text
+LLM_REVIEW_SECRETS=false
+  Disable secret candidate review entirely. Full mode keeps regex/rule secret results.
+
+LLM_REVIEW_FINDINGS=false
+  Disable finding review entirely. Full mode keeps rule findings.
+
+LLM_ALLOWED_SECRET_TYPES=type1,type2
+  Only these secret types enter LLM. Empty means all types.
+
+LLM_ALLOWED_FINDING_CATEGORIES=分类1,分类2
+  Only these finding categories enter LLM. Empty means all categories.
+```
 
 When `auth.enabled` is true, all analysis APIs require the configured API key header.
 `GET /health` remains unauthenticated for health checks.

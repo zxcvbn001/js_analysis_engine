@@ -1,5 +1,6 @@
 import type { FindingReviewContext, LLMFindingReviewResult, LLMProvider, LLMSecretBatchResult, SecretContext } from '../../types/llm.js';
 import type { ApiResult, AnalyzeMode, FindingResult, SecretResult } from '../../types/results.js';
+import { getConfig } from '../../config/appConfig.js';
 import { sha256 } from '../../utils/hash.js';
 import { errorFields, logError, logInfo } from '../../utils/logger.js';
 
@@ -43,17 +44,26 @@ export class LLMUnifiedAnalyzer {
     findings: FindingResult[];
     apis: ApiResult[];
   }): Promise<UnifiedReviewOutput> {
+    const llmConfig = getConfig().llm;
     const enabled = Boolean(this.provider?.analyzeUnifiedBatch);
+    const secretTypeAllowList = new Set(llmConfig.allowedSecretTypes);
+    const findingCategoryAllowList = new Set(llmConfig.allowedFindingCategories);
+    const reviewSecretsEnabled = llmConfig.reviewSecrets;
+    const reviewFindingsEnabled = llmConfig.reviewFindings;
+    const reviewableSecrets = input.secrets.filter((context) => reviewSecretsEnabled && matchesAllowList(secretTypeAllowList, context.candidate.type));
+    const passthroughSecrets = input.secrets.filter((context) => !reviewableSecrets.includes(context));
+    const reviewableFindings = input.findings.filter((finding) => reviewFindingsEnabled && matchesAllowList(findingCategoryAllowList, finding.category));
+    const passthroughFindings = input.findings.filter((finding) => !reviewableFindings.includes(finding));
     const llm = {
       enabled,
-      candidateCount: input.secrets.length,
+      candidateCount: reviewableSecrets.length,
       queuedCount: 0,
       droppedCount: 0,
       reviewedCount: 0,
       confirmedCount: 0,
       rejectedCount: 0,
       batchCount: 0,
-      findingCandidateCount: input.findings.length,
+      findingCandidateCount: reviewableFindings.length,
       findingReviewedCount: 0,
       findingConfirmedCount: 0,
       findingRejectedCount: 0,
@@ -65,27 +75,39 @@ export class LLMUnifiedAnalyzer {
       mode: input.mode,
       llmEnabled: Boolean(this.provider),
       unifiedReviewEnabled: enabled,
-      secretCandidateCount: input.secrets.length,
-      findingCandidateCount: input.findings.length,
+      secretCandidateCount: reviewableSecrets.length,
+      findingCandidateCount: reviewableFindings.length,
+      secretReviewEnabled: reviewSecretsEnabled,
+      findingReviewEnabled: reviewFindingsEnabled,
+      allowedSecretTypes: llmConfig.allowedSecretTypes,
+      allowedFindingCategories: llmConfig.allowedFindingCategories,
+      skippedSecretCount: passthroughSecrets.length,
+      skippedFindingCount: passthroughFindings.length,
       reason: input.mode !== 'full'
         ? 'mode is not full'
         : !this.provider
           ? 'llm provider is not configured'
           : !this.provider.analyzeUnifiedBatch
             ? 'llm provider does not support unified review'
-            : input.secrets.length + input.findings.length === 0
+            : reviewableSecrets.length + reviewableFindings.length === 0
               ? 'no review candidates'
               : 'llm unified review will run',
     });
 
     const analyzeUnifiedBatch = this.provider?.analyzeUnifiedBatch?.bind(this.provider);
-    if (input.mode !== 'full' || !enabled || !analyzeUnifiedBatch || input.secrets.length + input.findings.length === 0) {
+    if (input.mode !== 'full' || !enabled || !analyzeUnifiedBatch || reviewableSecrets.length + reviewableFindings.length === 0) {
       logInfo('llm_unified_review_not_requested', {
         mode: input.mode,
         llmEnabled: Boolean(this.provider),
         unifiedReviewEnabled: enabled,
-        secretCandidateCount: input.secrets.length,
-        findingCandidateCount: input.findings.length,
+        secretCandidateCount: reviewableSecrets.length,
+        findingCandidateCount: reviewableFindings.length,
+        secretReviewEnabled: reviewSecretsEnabled,
+        findingReviewEnabled: reviewFindingsEnabled,
+        allowedSecretTypes: llmConfig.allowedSecretTypes,
+        allowedFindingCategories: llmConfig.allowedFindingCategories,
+        skippedSecretCount: passthroughSecrets.length,
+        skippedFindingCount: passthroughFindings.length,
       });
       return {
         secrets: input.secrets.map(fallbackSecret),
@@ -94,11 +116,11 @@ export class LLMUnifiedAnalyzer {
       };
     }
 
-    const secretBatches = chunks(input.secrets, UNIFIED_SECRET_BATCH_SIZE);
-    const findingBatches = chunks(input.findings.map((finding) => ({ id: findingId(finding), finding })), UNIFIED_FINDING_BATCH_SIZE);
+    const secretBatches = chunks(reviewableSecrets, UNIFIED_SECRET_BATCH_SIZE);
+    const findingBatches = chunks(reviewableFindings.map((finding) => ({ id: findingId(finding), finding })), UNIFIED_FINDING_BATCH_SIZE);
     const batchCount = Math.max(secretBatches.length, findingBatches.length);
-    const reviewedSecrets: SecretResult[] = [];
-    const reviewedFindings: FindingResult[] = [];
+    const reviewedSecrets: SecretResult[] = passthroughSecrets.map(fallbackSecret);
+    const reviewedFindings: FindingResult[] = [...passthroughFindings];
 
     for (let index = 0; index < batchCount; index += 1) {
       const secretBatch = secretBatches[index] ?? [];
@@ -112,8 +134,8 @@ export class LLMUnifiedAnalyzer {
         batchIndex: index + 1,
         secretBatchSize: secretBatch.length,
         findingBatchSize: findingBatch.length,
-        secretCandidateCount: input.secrets.length,
-        findingCandidateCount: input.findings.length,
+        secretCandidateCount: reviewableSecrets.length,
+        findingCandidateCount: reviewableFindings.length,
         secretIds: secretBatch.map((context) => context.candidate.id),
         findingIds: findingBatch.map((context) => context.id),
       });
@@ -178,8 +200,8 @@ export class LLMUnifiedAnalyzer {
     }
 
     return {
-      secrets: reviewedSecrets,
-      findings: reviewedFindings,
+      secrets: dedupeSecrets(reviewedSecrets),
+      findings: dedupeFindings(reviewedFindings),
       llm,
     };
   }
@@ -250,4 +272,32 @@ function chunks<T>(values: T[], size: number): T[][] {
     result.push(values.slice(index, index + size));
   }
   return result;
+}
+
+function matchesAllowList(allowList: Set<string>, value: string): boolean {
+  return allowList.size === 0 || allowList.has(value);
+}
+
+function dedupeSecrets(secrets: SecretResult[]): SecretResult[] {
+  const seen = new Set<string>();
+  return secrets.filter((secret) => {
+    const key = `${secret.type}:${secret.value ?? ''}:${secret.evidence ?? ''}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeFindings(findings: FindingResult[]): FindingResult[] {
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = `${finding.category}:${finding.type}:${finding.source}:${finding.value ?? ''}:${finding.evidence ?? ''}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }

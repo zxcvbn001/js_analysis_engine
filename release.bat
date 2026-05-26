@@ -13,11 +13,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if (!(Test-Path $releaseDir)) { New-Item -ItemType Directory -Path $releaseDir | Out-Null };" ^
   "if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force };" ^
   "New-Item -ItemType Directory -Path $stage | Out-Null;" ^
-  "$files = @('src', 'docs', 'config.example.json', 'package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts', '.gitignore', 'LICENSE');" ^
+  "$files = @('src', 'docs', 'config', 'package.json', 'package-lock.json', 'tsconfig.json', 'vitest.config.ts', '.gitignore', 'LICENSE');" ^
   "foreach ($file in $files) { if (Test-Path $file) { Copy-Item -LiteralPath $file -Destination $stage -Recurse -Force } };" ^
-  "$configStage = Join-Path $stage 'config';" ^
-  "New-Item -ItemType Directory -Path $configStage -Force | Out-Null;" ^
-  "if (Test-Path 'config\README.md') { Copy-Item -LiteralPath 'config\README.md' -Destination $configStage -Force };" ^
   "if (Test-Path 'README.md') { Copy-Item -LiteralPath 'README.md' -Destination $stage -Force };" ^
   "$stageItems = Join-Path $stage '*';" ^
   "Compress-Archive -Path $stageItems -DestinationPath $zip -Force;" ^

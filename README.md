@@ -114,13 +114,13 @@ npm start
 复制配置模板：
 
 ```bash
-cp config.example.json config/config.json
+cp config/config.example.json config/config.json
 ```
 
 Windows PowerShell：
 
 ```powershell
-Copy-Item config.example.json config\config.json
+Copy-Item config\config.example.json config\config.json
 ```
 
 `config/config.json` 已加入 `.gitignore`，因为它可能包含 API Key、LLM Key 等敏感信息。
@@ -191,9 +191,29 @@ LLM_TIMEOUT_MS=30000
 LLM_LOG_PROMPTS=true
 LLM_LOG_RESPONSES=true
 LLM_LOG_RAW_PAYLOADS=false
+LLM_REVIEW_SECRETS=true
+LLM_REVIEW_FINDINGS=true
+LLM_ALLOWED_SECRET_TYPES=bearer-token,aws-key
+LLM_ALLOWED_FINDING_CATEGORIES=敏感凭据,云配置,JWT/OAuth
 ```
 
 LLM 交互日志默认记录脱敏后的 prompt/response 摘要。只有临时排障时才建议开启 `LLM_LOG_RAW_PAYLOADS=true`，因为原始 prompt 可能包含源码上下文和敏感候选。
+
+如果 `full` 模式下 LLM 经常超时，可以缩小复核范围：
+
+```text
+LLM_REVIEW_SECRETS=false
+  不再对 Secret 候选做 LLM 复核，保留规则结果。
+
+LLM_REVIEW_FINDINGS=false
+  不再对 findings 做 LLM 复核，保留规则结果。
+
+LLM_ALLOWED_SECRET_TYPES=type1,type2
+  只让指定 Secret 类型进入 LLM；留空表示全部类型。
+
+LLM_ALLOWED_FINDING_CATEGORIES=分类1,分类2
+  只让指定 finding 分类进入 LLM；留空表示全部分类。
+```
 
 ## API 概览
 

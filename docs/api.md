@@ -888,6 +888,24 @@ LLM_LOG_RAW_PAYLOADS=false
 
 开启后会在 `llm_provider_prompt_built`、`llm_provider_request_start`、`llm_provider_response_body_received` 等日志里看到脱敏后的 prompt/response 摘要。只有临时排障时才建议开启 `LLM_LOG_RAW_PAYLOADS=true`，因为原始 payload 可能包含源码上下文和敏感候选。
 
+如果 `full` 模式下 LLM 经常超时，可以通过配置缩小复核范围：
+
+```text
+LLM_REVIEW_SECRETS=false
+  不再让 Secret 候选进入 LLM，保留规则 Secret 结果。
+
+LLM_REVIEW_FINDINGS=false
+  不再让 findings 进入 LLM，保留规则 findings 结果。
+
+LLM_ALLOWED_SECRET_TYPES=bearer-token,aws-key
+  只有命中的 Secret 类型才进入 LLM；留空表示全部类型。
+
+LLM_ALLOWED_FINDING_CATEGORIES=敏感凭据,云配置,JWT/OAuth
+  只有命中的 finding 分类才进入 LLM；留空表示全部分类。
+```
+
+被配置排除的结果不会被丢弃，只是不进入 LLM 复核，最终仍按 AST/规则结果返回。
+
 配置示例：
 
 ```json

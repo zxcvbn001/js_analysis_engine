@@ -32,6 +32,10 @@ const configSchema = z.object({
     logPrompts: z.boolean(),
     logResponses: z.boolean(),
     logRawPayloads: z.boolean(),
+    reviewSecrets: z.boolean(),
+    reviewFindings: z.boolean(),
+    allowedSecretTypes: z.array(z.string().min(1)),
+    allowedFindingCategories: z.array(z.string().min(1)),
   }),
 });
 
@@ -67,6 +71,10 @@ const defaultConfig: AppConfig = {
     logPrompts: true,
     logResponses: true,
     logRawPayloads: false,
+    reviewSecrets: true,
+    reviewFindings: true,
+    allowedSecretTypes: [],
+    allowedFindingCategories: [],
   },
 };
 
@@ -148,6 +156,10 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
       logPrompts: readBooleanEnv('LLM_LOG_PROMPTS', config.llm.logPrompts),
       logResponses: readBooleanEnv('LLM_LOG_RESPONSES', config.llm.logResponses),
       logRawPayloads: readBooleanEnv('LLM_LOG_RAW_PAYLOADS', config.llm.logRawPayloads),
+      reviewSecrets: readBooleanEnv('LLM_REVIEW_SECRETS', config.llm.reviewSecrets),
+      reviewFindings: readBooleanEnv('LLM_REVIEW_FINDINGS', config.llm.reviewFindings),
+      allowedSecretTypes: readCsvEnv('LLM_ALLOWED_SECRET_TYPES', config.llm.allowedSecretTypes),
+      allowedFindingCategories: readCsvEnv('LLM_ALLOWED_FINDING_CATEGORIES', config.llm.allowedFindingCategories),
     },
   };
 }
@@ -185,6 +197,19 @@ function readApiKeys(fallback: string[]): string[] {
     return fallback;
   }
 
+  return parseCsv(raw);
+}
+
+function readCsvEnv(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  return parseCsv(raw);
+}
+
+function parseCsv(raw: string): string[] {
   return raw
     .split(',')
     .map((value) => value.trim())
