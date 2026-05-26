@@ -31,13 +31,13 @@
     "logResponses": true,
     "logRawPayloads": false,
     "reviewSecrets": true,
-    "reviewFindings": true,
+    "reviewRiskCandidates": true,
     "allowedSecretTypes": [
       "bearer-token",
       "aws-key",
       "jwt"
     ],
-    "allowedFindingCategories": [
+    "allowedRiskCategories": [
       "敏感凭据",
       "云配置",
       "JWT/OAuth"

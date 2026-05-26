@@ -10,7 +10,6 @@ const riskTerms: Array<{ pattern: RegExp; type: string; severity: Severity; scop
   { pattern: /\/(?:debug|__debug|devtools)(?:\/|$|\?)/i, type: 'debug-endpoint', severity: 'medium', scope: 'api' },
   { pattern: /\/(?:delete|remove|destroy|drop|truncate)(?:[A-Z/?_-]|$)/i, type: 'destructive-api', severity: 'medium', scope: 'api' },
   { pattern: /\/(?:export|download)(?:[A-Z/?_-]|$)/i, type: 'export-api', severity: 'medium', scope: 'api' },
-  { pattern: /^(?:eval|Function)$/i, type: 'client-code-execution', severity: 'high', scope: 'call' },
 ];
 
 export function analyzeRisks(ast: t.File, apis: ApiResult[]): RiskResult[] {

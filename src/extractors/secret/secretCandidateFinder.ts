@@ -17,7 +17,7 @@ const rules: PatternRule[] = [
   { type: 'aws-key', severity: 'high', valuePattern: /AKIA[0-9A-Z]{16}/, namePattern: /aws|secret_access_key/i },
   { type: 'bearer-token', severity: 'high', valuePattern: /Bearer\s+[A-Za-z0-9._~+/=-]{12,}/i },
   { type: 'firebase', severity: 'medium', valuePattern: /firebaseio\.com|firebaseapp\.com|AIza[0-9A-Za-z_-]{20,}/i },
-  { type: 'smtp', severity: 'medium', valuePattern: /smtp\.[A-Za-z0-9.-]+/i, namePattern: /smtp|mail/i },
+  { type: 'smtp', severity: 'medium', valuePattern: /(?:smtp:\/\/)?smtp\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d{2,5})?/i },
   { type: 'oss', severity: 'medium', valuePattern: /oss-[a-z0-9-]+\.aliyuncs\.com|aliyuncs\.com/i, namePattern: /oss|aliyun/i },
   { type: 'internal-url', severity: 'medium', valuePattern: /https?:\/\/(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|127\.0\.0\.1|localhost)/i },
   { type: 'debug-endpoint', severity: 'medium', valuePattern: /\/(?:debug|devtools|__debug|actuator)(?:\/|$|\?)/i, namePattern: /debug/i },
@@ -126,6 +126,9 @@ function matchCandidate(content: string | undefined, value: string | undefined, 
   }
 
   const text = value ?? '';
+  if (value && isClearlyNonSecretTemplate(value)) {
+    return [];
+  }
   const context = content
     ? buildEvidenceSnippet({
         content,
@@ -212,6 +215,20 @@ function redact(value: string | undefined): string {
 
 function isClearlyPlaceholder(value: string): boolean {
   return /^(xxx+|your[_-]?|example|changeme|password|token)$/i.test(value);
+}
+
+function isClearlyNonSecretTemplate(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (/%[sdifoOjc]/.test(trimmed)) {
+    return true;
+  }
+  if (/\{[A-Za-z0-9_]+\}/.test(trimmed) && /\b(?:valid|invalid|required|missing|error|failed|format)\b/i.test(trimmed)) {
+    return true;
+  }
+  return /\b(?:is not a valid|must be|should be|required|invalid|validation failed)\b/i.test(trimmed);
 }
 
 function hasSecretSignal(value: string): boolean {

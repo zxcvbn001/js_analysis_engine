@@ -1,7 +1,10 @@
 import type { FindingReviewContext, LLMFindingReviewResult, LLMProvider, LLMSecretBatchResult, LLMSecretResult, LLMUnifiedReviewResult, SecretContext, UnifiedReviewContext } from '../../types/llm.js';
 import { getConfig } from '../../config/appConfig.js';
-import { errorFields, logError, logInfo } from '../../utils/logger.js';
+import { errorFields, logError, logInfo, logWarn } from '../../utils/logger.js';
 import { buildFindingBatchPrompt, buildSecretBatchPrompt, buildSecretPrompt, buildUnifiedReviewPrompt, toCompactUnifiedPromptPayload } from '../prompts/secretPrompt.js';
+
+const MAX_LLM_PROVIDER_ATTEMPTS = 2;
+const LLM_RETRY_DELAY_MS = 500;
 
 export interface DeepSeekProviderOptions {
   apiKey: string;
@@ -96,8 +99,6 @@ export class DeepSeekProvider implements LLMProvider {
       throw new Error('LLM_API_KEY is not configured');
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
     const url = `${this.options.baseUrl.replace(/\/$/, '')}/chat/completions`;
     const startedAt = Date.now();
     const requestBody = {
@@ -107,97 +108,196 @@ export class DeepSeekProvider implements LLMProvider {
       messages: [{ role: 'user', content: prompt }],
     };
 
-    try {
-      logInfo('llm_provider_prompt_built', {
-        provider: 'deepseek',
-        model: this.options.model,
-        operation: meta.operation,
-        candidateCount: meta.candidateCount,
-        candidateIds: meta.candidateIds,
-        promptLength: prompt.length,
-        promptStats: meta.promptStats,
-        promptPreview: this.options.logPrompts ? redactLLMText(prompt) : undefined,
-        promptRaw: this.options.logPrompts && this.options.logRawPayloads ? prompt : undefined,
-      });
+    logInfo('llm_provider_prompt_built', {
+      provider: 'deepseek',
+      model: this.options.model,
+      operation: meta.operation,
+      candidateCount: meta.candidateCount,
+      candidateIds: meta.candidateIds,
+      promptLength: prompt.length,
+      promptStats: meta.promptStats,
+      promptPreview: this.options.logPrompts ? redactLLMText(prompt) : undefined,
+      promptRaw: this.options.logPrompts && this.options.logRawPayloads ? prompt : undefined,
+    });
 
-      logInfo('llm_provider_request_start', {
-        provider: 'deepseek',
-        model: this.options.model,
-        baseUrl: this.options.baseUrl,
-        url,
-        operation: meta.operation,
-        candidateCount: meta.candidateCount,
-        candidateIds: meta.candidateIds,
-        promptLength: prompt.length,
-        promptStats: meta.promptStats,
-        requestBodyLength: JSON.stringify(requestBody).length,
-        requestBodyPreview: this.options.logPrompts ? redactLLMText(JSON.stringify(requestBody)) : undefined,
-        requestBodyRaw: this.options.logPrompts && this.options.logRawPayloads ? requestBody : undefined,
-        timeoutMs: this.options.timeoutMs,
-      });
+    logInfo('llm_provider_request_start', {
+      provider: 'deepseek',
+      model: this.options.model,
+      baseUrl: this.options.baseUrl,
+      url,
+      operation: meta.operation,
+      candidateCount: meta.candidateCount,
+      candidateIds: meta.candidateIds,
+      promptLength: prompt.length,
+      promptStats: meta.promptStats,
+      requestBodyLength: JSON.stringify(requestBody).length,
+      requestBodyPreview: this.options.logPrompts ? redactLLMText(JSON.stringify(requestBody)) : undefined,
+      requestBodyRaw: this.options.logPrompts && this.options.logRawPayloads ? requestBody : undefined,
+      timeoutMs: this.options.timeoutMs,
+      maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+    });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.options.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-      });
+    for (let attempt = 1; attempt <= MAX_LLM_PROVIDER_ATTEMPTS; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+      const attemptStartedAt = Date.now();
 
-      logInfo('llm_provider_response_received', {
-        provider: 'deepseek',
-        model: this.options.model,
-        operation: meta.operation,
-        status: response.status,
-        ok: response.ok,
-        durationMs: Date.now() - startedAt,
-      });
+      try {
+        logInfo('llm_provider_request_attempt_start', {
+          provider: 'deepseek',
+          model: this.options.model,
+          operation: meta.operation,
+          attempt,
+          maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+          timeoutMs: this.options.timeoutMs,
+        });
 
-      if (!response.ok) {
-        throw new Error(`DeepSeek request failed with ${response.status}`);
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.options.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+
+        logInfo('llm_provider_response_received', {
+          provider: 'deepseek',
+          model: this.options.model,
+          operation: meta.operation,
+          attempt,
+          maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+          status: response.status,
+          ok: response.ok,
+          durationMs: Date.now() - attemptStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+        });
+
+        if (!response.ok) {
+          throw new DeepSeekHttpError(response.status, await safeResponsePreview(response));
+        }
+
+        const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+        logInfo('llm_provider_response_body_received', {
+          provider: 'deepseek',
+          model: this.options.model,
+          operation: meta.operation,
+          attempt,
+          maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+          choiceCount: payload.choices?.length ?? 0,
+          durationMs: Date.now() - attemptStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+          responsePreview: this.options.logResponses ? redactLLMText(JSON.stringify(payload)) : undefined,
+          responseRaw: this.options.logResponses && this.options.logRawPayloads ? payload : undefined,
+        });
+        const content = payload.choices?.[0]?.message?.content;
+        if (!content) {
+          throw new Error('DeepSeek returned an empty response');
+        }
+
+        logInfo('llm_provider_response_parsed', {
+          provider: 'deepseek',
+          model: this.options.model,
+          operation: meta.operation,
+          attempt,
+          maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+          contentLength: content.length,
+          contentPreview: this.options.logResponses ? redactLLMText(content) : undefined,
+          contentRaw: this.options.logResponses && this.options.logRawPayloads ? content : undefined,
+          durationMs: Date.now() - attemptStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+        });
+
+        return content;
+      } catch (error) {
+        const willRetry = attempt < MAX_LLM_PROVIDER_ATTEMPTS && isRetryableLLMError(error);
+        if (willRetry) {
+          logWarn('llm_provider_request_retry', {
+            provider: 'deepseek',
+            model: this.options.model,
+            operation: meta.operation,
+            attempt,
+            maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+            delayMs: LLM_RETRY_DELAY_MS,
+            durationMs: Date.now() - attemptStartedAt,
+            totalDurationMs: Date.now() - startedAt,
+            ...errorFields(error),
+            ...llmErrorExtraFields(error),
+          });
+          await delay(LLM_RETRY_DELAY_MS);
+          continue;
+        }
+
+        logError('llm_provider_request_failed', {
+          provider: 'deepseek',
+          model: this.options.model,
+          operation: meta.operation,
+          attempt,
+          maxAttempts: MAX_LLM_PROVIDER_ATTEMPTS,
+          retryable: isRetryableLLMError(error),
+          durationMs: Date.now() - startedAt,
+          ...errorFields(error),
+          ...llmErrorExtraFields(error),
+        });
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-      logInfo('llm_provider_response_body_received', {
-        provider: 'deepseek',
-        model: this.options.model,
-        operation: meta.operation,
-        choiceCount: payload.choices?.length ?? 0,
-        durationMs: Date.now() - startedAt,
-        responsePreview: this.options.logResponses ? redactLLMText(JSON.stringify(payload)) : undefined,
-        responseRaw: this.options.logResponses && this.options.logRawPayloads ? payload : undefined,
-      });
-      const content = payload.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error('DeepSeek returned an empty response');
-      }
-
-      logInfo('llm_provider_response_parsed', {
-        provider: 'deepseek',
-        model: this.options.model,
-        operation: meta.operation,
-        contentLength: content.length,
-        contentPreview: this.options.logResponses ? redactLLMText(content) : undefined,
-        contentRaw: this.options.logResponses && this.options.logRawPayloads ? content : undefined,
-        durationMs: Date.now() - startedAt,
-      });
-
-      return content;
-    } catch (error) {
-      logError('llm_provider_request_failed', {
-        provider: 'deepseek',
-        model: this.options.model,
-        operation: meta.operation,
-        durationMs: Date.now() - startedAt,
-        ...errorFields(error),
-      });
-      throw error;
-    } finally {
-      clearTimeout(timeout);
     }
+
+    throw new Error('DeepSeek request failed after retry attempts');
   }
+}
+
+class DeepSeekHttpError extends Error {
+  constructor(readonly status: number, readonly responsePreview: string) {
+    super(`DeepSeek request failed with ${status}`);
+    this.name = 'DeepSeekHttpError';
+  }
+}
+
+async function safeResponsePreview(response: Response): Promise<string> {
+  try {
+    return redactLLMText((await response.text()).slice(0, 2000));
+  } catch {
+    return '';
+  }
+}
+
+function isRetryableLLMError(error: unknown): boolean {
+  if (error instanceof DeepSeekHttpError) {
+    return error.status === 429 || error.status >= 500;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (error.name === 'AbortError') {
+    return false;
+  }
+
+  const cause = error.cause;
+  const causeText = cause instanceof Error ? `${cause.name} ${cause.message}` : String(cause ?? '');
+  const text = `${error.name} ${error.message} ${causeText}`.toLowerCase();
+  return /fetch failed|network|socket|other side closed|connection|econnreset|etimedout|terminated/.test(text);
+}
+
+function llmErrorExtraFields(error: unknown): Record<string, unknown> {
+  if (error instanceof DeepSeekHttpError) {
+    return {
+      httpStatus: error.status,
+      responsePreview: error.responsePreview,
+    };
+  }
+  return {};
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function redactLLMText(value: string, maxLength = 12000): string {

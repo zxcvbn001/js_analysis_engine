@@ -2,6 +2,21 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 
+const llmConfigSchema = z.object({
+  provider: z.string(),
+  model: z.string(),
+  apiKey: z.string(),
+  baseUrl: z.string(),
+  timeoutMs: z.number().int().min(1000).max(120000),
+  logPrompts: z.boolean(),
+  logResponses: z.boolean(),
+  logRawPayloads: z.boolean(),
+  reviewSecrets: z.boolean(),
+  reviewRiskCandidates: z.boolean(),
+  allowedSecretTypes: z.array(z.string().min(1)),
+  allowedRiskCategories: z.array(z.string().min(1)),
+});
+
 const configSchema = z.object({
   server: z.object({
     host: z.string(),
@@ -23,20 +38,7 @@ const configSchema = z.object({
     headerName: z.string().min(1),
     apiKeys: z.array(z.string().min(1)),
   }),
-  llm: z.object({
-    provider: z.string(),
-    model: z.string(),
-    apiKey: z.string(),
-    baseUrl: z.string(),
-    timeoutMs: z.number().int().min(1000).max(120000),
-    logPrompts: z.boolean(),
-    logResponses: z.boolean(),
-    logRawPayloads: z.boolean(),
-    reviewSecrets: z.boolean(),
-    reviewFindings: z.boolean(),
-    allowedSecretTypes: z.array(z.string().min(1)),
-    allowedFindingCategories: z.array(z.string().min(1)),
-  }),
+  llm: llmConfigSchema,
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -72,9 +74,9 @@ const defaultConfig: AppConfig = {
     logResponses: true,
     logRawPayloads: false,
     reviewSecrets: true,
-    reviewFindings: true,
+    reviewRiskCandidates: true,
     allowedSecretTypes: [],
-    allowedFindingCategories: [],
+    allowedRiskCategories: [],
   },
 };
 
@@ -157,9 +159,9 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
       logResponses: readBooleanEnv('LLM_LOG_RESPONSES', config.llm.logResponses),
       logRawPayloads: readBooleanEnv('LLM_LOG_RAW_PAYLOADS', config.llm.logRawPayloads),
       reviewSecrets: readBooleanEnv('LLM_REVIEW_SECRETS', config.llm.reviewSecrets),
-      reviewFindings: readBooleanEnv('LLM_REVIEW_FINDINGS', config.llm.reviewFindings),
+      reviewRiskCandidates: readBooleanEnv('LLM_REVIEW_RISK_CANDIDATES', config.llm.reviewRiskCandidates),
       allowedSecretTypes: readCsvEnv('LLM_ALLOWED_SECRET_TYPES', config.llm.allowedSecretTypes),
-      allowedFindingCategories: readCsvEnv('LLM_ALLOWED_FINDING_CATEGORIES', config.llm.allowedFindingCategories),
+      allowedRiskCategories: readCsvEnv('LLM_ALLOWED_RISK_CATEGORIES', config.llm.allowedRiskCategories),
     },
   };
 }

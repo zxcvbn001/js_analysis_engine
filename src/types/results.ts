@@ -103,26 +103,10 @@ export interface AnalysisMeta {
   };
 }
 
-export interface CompactAnalysisSummary {
-  apiCount: number;
-  assetCount: number;
-  paramCount: number;
-  authCount: number;
-  secretCount: number;
-  riskCount: number;
-  findingCount: number;
+export interface BurpAnalysisSummary {
   endpointCount: number;
-  exposureCount: number;
-  scriptCount: number;
-  llm: {
-    enabled: boolean;
-    reviewedCount: number;
-    confirmedCount: number;
-    rejectedCount: number;
-    findingReviewedCount: number;
-    findingConfirmedCount: number;
-    findingRejectedCount: number;
-  };
+  leakCount: number;
+  jsFileCount: number;
 }
 
 export interface AnalysisResult {
@@ -139,16 +123,36 @@ export interface AnalysisResult {
   meta: AnalysisMeta;
 }
 
-export interface CompactAnalysisResult {
+export interface LeakResult {
+  category: string;
+  type: string;
+  value?: string;
+  severity: Severity;
+  confidence?: number;
+  source?: string;
+  evidence?: string;
+}
+
+export interface EndpointResult extends ApiResult {
+  evidence?: string;
+}
+
+export interface JsFileResult {
+  url: string;
+  type: AssetResult['type'] | 'webpack-module';
+  chunkName?: string;
+  source?: string;
+  confidence?: number;
+  evidence?: string;
+}
+
+export interface BurpAnalysisResult {
   success: true;
   url?: string;
-  summary: CompactAnalysisSummary;
-  apis: ApiResult[];
-  assets: AssetResult[];
-  params: ParamResult[];
-  auth: string[];
-  secrets: SecretResult[];
-  findings: FindingResult[];
+  summary: BurpAnalysisSummary;
+  leaks: LeakResult[];
+  endpoints: EndpointResult[];
+  jsFiles: JsFileResult[];
 }
 
 export interface AnalysisError {
@@ -159,7 +163,7 @@ export interface AnalysisError {
 }
 
 export type AnalysisResponse = AnalysisResult | AnalysisError;
-export type AnalysisApiResponse = AnalysisResult | CompactAnalysisResult | AnalysisError;
+export type AnalysisApiResponse = BurpAnalysisResult | AnalysisError;
 
 export interface AnalyzeOptions {
   mode: AnalyzeMode;

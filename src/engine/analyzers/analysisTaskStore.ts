@@ -4,7 +4,7 @@ import type { AnalyzeMode } from '../../types/results.js';
 import { getConfig } from '../../config/appConfig.js';
 import { fetchTextContent } from '../../utils/fetchContent.js';
 import { analyzeJavaScript } from './javascriptAnalyzer.js';
-import { summarizeAnalysis, summarizeContent } from '../../utils/analysisSummary.js';
+import { summarizeAnalysis, summarizeApiResponse, summarizeContent } from '../../utils/analysisSummary.js';
 import { logError, logInfo } from '../../utils/logger.js';
 import type { AnalysisResponseMode } from '../../types/results.js';
 import { formatAnalysisResponse } from '../../api/response/analysisResponseFormatter.js';
@@ -32,6 +32,9 @@ export function submitAnalysisTask(input: SubmitTaskInput): AnalysisTask {
   trimOldTasks();
   logInfo('analysis_task_queued', {
     taskId: task.id,
+    returnedTaskId: task.id,
+    status: task.status,
+    statusUrl: `/analyze/tasks/${task.id}`,
     url: input.url,
     mode: input.mode,
     responseMode: input.responseMode,
@@ -94,6 +97,8 @@ async function runTask(id: string, input: SubmitTaskInput): Promise<void> {
     taskId: id,
     url: input.url,
     durationMs: Date.now() - startedAt,
+    responseMode: input.responseMode,
+    resultSummary: summarizeApiResponse(formattedResult),
     ...summarizeAnalysis(result),
   });
 }

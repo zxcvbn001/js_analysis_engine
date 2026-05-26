@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AnalysisResult, AnalyzeMode, FindingResult } from '../types/results.js';
+import type { AnalysisApiResponse, AnalysisResult, AnalyzeMode, FindingResult } from '../types/results.js';
 
 export interface ContentSummary {
   source: 'content' | 'download';
@@ -42,6 +42,22 @@ export interface AnalysisLogSummary {
   llmFindingBatchCount: number;
 }
 
+export interface RequestLogSummary {
+  hasUrl: boolean;
+  urlHost?: string;
+  urlPath?: string;
+  hasContent: boolean;
+  inputContentLength: number;
+  inputContentLineCount: number;
+  inputContentSha256?: string;
+  async: boolean;
+  responseMode: 'full' | 'compact';
+  fastMode?: boolean;
+  requestedMode?: AnalyzeMode;
+  mode: AnalyzeMode;
+  llmExpected: boolean;
+}
+
 export function summarizeContent(input: { content: string; source: 'content' | 'download'; url?: string }): ContentSummary {
   return {
     source: input.source,
@@ -49,6 +65,34 @@ export function summarizeContent(input: { content: string; source: 'content' | '
     contentLength: input.content.length,
     lineCount: input.content.length === 0 ? 0 : input.content.split(/\r?\n/).length,
     sha256: createHash('sha256').update(input.content).digest('hex'),
+  };
+}
+
+export function summarizeAnalyzeRequest(input: {
+  url?: string;
+  content?: string;
+  async?: boolean;
+  responseMode: 'full' | 'compact';
+  fastMode?: boolean;
+  requestedMode?: AnalyzeMode;
+  mode: AnalyzeMode;
+}): RequestLogSummary {
+  const trimmedContent = input.content?.trim() ?? '';
+  const url = parseUrl(input.url);
+  return {
+    hasUrl: Boolean(input.url?.trim()),
+    urlHost: url?.host,
+    urlPath: url?.pathname,
+    hasContent: Boolean(trimmedContent),
+    inputContentLength: input.content?.length ?? 0,
+    inputContentLineCount: trimmedContent ? input.content?.split(/\r?\n/).length ?? 0 : 0,
+    inputContentSha256: trimmedContent ? createHash('sha256').update(input.content ?? '').digest('hex') : undefined,
+    async: input.async === true,
+    responseMode: input.responseMode,
+    fastMode: input.fastMode,
+    requestedMode: input.requestedMode,
+    mode: input.mode,
+    llmExpected: input.mode === 'full',
   };
 }
 
@@ -94,6 +138,22 @@ export function summarizeMode(mode: AnalyzeMode): { mode: AnalyzeMode; llmExpect
   };
 }
 
+export function summarizeApiResponse(response: AnalysisApiResponse): Record<string, unknown> {
+  if (!response.success) {
+    return {
+      success: false,
+      errorMessage: response.error.message,
+    };
+  }
+
+  return {
+    success: true,
+    endpointCount: response.summary.endpointCount,
+    leakCount: response.summary.leakCount,
+    jsFileCount: response.summary.jsFileCount,
+  };
+}
+
 function countBy(values: string[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const value of values) {
@@ -104,4 +164,16 @@ function countBy(values: string[]): Record<string, number> {
 
 function isHighSeverity(finding: FindingResult): boolean {
   return finding.severity === 'high';
+}
+
+function parseUrl(value?: string): URL | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
 }

@@ -25,13 +25,23 @@ describe('http api', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.success).toBe(true);
-    expect(body.apis[0].url).toBe('/api/user');
-    expect(body.assets).toEqual([]);
-    expect(body.groups.endpoints.apis[0].url).toBe('/api/user');
+    expect(body.endpoints[0].url).toBe('/api/user');
+    expect(body.jsFiles).toEqual([]);
+    expect(body.leaks).toEqual([]);
+    expect(body.apis).toBeUndefined();
+    expect(body.assets).toBeUndefined();
+    expect(body.secrets).toBeUndefined();
+    expect(body.findings).toBeUndefined();
+    expect(body.groups).toBeUndefined();
+    expect(body.summary).toEqual({
+      endpointCount: body.endpoints.length,
+      leakCount: body.leaks.length,
+      jsFileCount: body.jsFiles.length,
+    });
     await app.close();
   });
 
-  it('returns a compact response when response_mode=compact', async () => {
+  it('keeps Burp response shape when response_mode=compact', async () => {
     const app = await buildServer();
     const response = await app.inject({
       method: 'POST',
@@ -47,11 +57,18 @@ describe('http api', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.success).toBe(true);
-    expect(body.summary.apiCount).toBe(1);
-    expect(body.apis[0].url).toBe('/api/user');
+    expect(body.summary.endpointCount).toBe(body.endpoints.length);
+    expect(body.summary.leakCount).toBe(body.leaks.length);
+    expect(body.summary.jsFileCount).toBe(body.jsFiles.length);
+    expect(body.summary.paramCount).toBeUndefined();
+    expect(body.summary.authCount).toBeUndefined();
+    expect(body.summary.llm).toBeUndefined();
+    expect(body.endpoints[0].url).toBe('/api/user');
     expect(body.groups).toBeUndefined();
     expect(body.meta).toBeUndefined();
     expect(body.risk).toBeUndefined();
+    expect(body.apis).toBeUndefined();
+    expect(body.findings).toBeUndefined();
     await app.close();
   });
 
@@ -89,7 +106,7 @@ describe('http api', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().apis[0].url).toBe('/downloaded.js-api');
+    expect(response.json().endpoints[0].url).toBe('/downloaded.js-api');
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'https://example.com/app.js',
       expect.objectContaining({ method: 'GET' }),
@@ -112,7 +129,7 @@ describe('http api', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().apis[0].url).toBe('/from-content');
+    expect(response.json().endpoints[0].url).toBe('/from-content');
     expect(fetchMock).not.toHaveBeenCalled();
 
     await app.close();
@@ -138,16 +155,23 @@ describe('http api', () => {
     const logText = readFileSync(logFile, 'utf8');
     expect(logText).toContain('[INFO]');
     expect(logText).toContain('analyze_js_request_received');
+    expect(logText).toContain('analyze_js_request_summary');
     expect(logText).toContain('analyze_js_content_prepared');
     expect(logText).toContain('analyze_js_success');
+    expect(logText).toContain('analyze_js_response_sent');
     expect(logText).toContain('contentLength');
+    expect(logText).toContain('inputContentSha256');
     expect(logText).toContain('sha256');
     expect(logText).toContain('apiCount');
+    expect(logText).toContain('endpointCount');
+    expect(logText).toContain('leakCount');
+    expect(logText).toContain('jsFileCount');
     expect(logText).toContain('findingCategoryCounts');
     expect(logText).toContain('endpointGroupCount');
     expect(logText).toContain('exposureGroupCount');
     expect(logText).toContain('scriptGroupCount');
     expect(logText).toContain('llmCandidateCount');
+    expect(logText).toContain('responseMode="full"');
 
     await app.close();
   });
@@ -181,7 +205,7 @@ describe('http api', () => {
   });
 
   it('submits async analysis tasks and returns results by id', async () => {
-    const app = await buildServer(testConfig());
+    const app = await buildServer(testConfig({ logDir: 'tmp-test-logs' }));
     const submitted = await app.inject({
       method: 'POST',
       url: '/analyze/js',
@@ -194,8 +218,9 @@ describe('http api', () => {
     expect(submitted.statusCode).toBe(202);
     const taskId = submitted.json().task_id;
     expect(taskId).toBeTruthy();
+    expect(submitted.json().status_url).toBe(`/analyze/tasks/${taskId}`);
 
-    let taskBody: { task?: { status: string; result?: { success: boolean; apis?: Array<{ url: string }> } } } = {};
+    let taskBody: { task?: { status: string; result?: { success: boolean; endpoints?: Array<{ url: string }> } } } = {};
     for (let index = 0; index < 10; index += 1) {
       const taskResponse = await app.inject({
         method: 'GET',
@@ -210,7 +235,14 @@ describe('http api', () => {
 
     expect(taskBody.task?.status).toBe('completed');
     expect(taskBody.task?.result?.success).toBe(true);
-    expect(taskBody.task?.result?.apis?.[0]?.url).toBe('/async-api');
+    expect(taskBody.task?.result?.endpoints?.[0]?.url).toBe('/async-api');
+    const logFile = join(process.cwd(), 'tmp-test-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('analyze_js_task_submitted');
+    expect(logText).toContain(`returnedTaskId="${taskId}"`);
+    expect(logText).toContain(`statusUrl="/analyze/tasks/${taskId}"`);
+    expect(logText).toContain('analysis_task_completed');
+    expect(logText).toContain('analyze_task_response_sent');
 
     await app.close();
   });
@@ -231,7 +263,21 @@ describe('http api', () => {
     const taskId = submitted.json().task_id;
     expect(taskId).toBeTruthy();
 
-    let taskBody: { task?: { status: string; result?: { success: boolean; summary?: { apiCount: number }; apis?: Array<{ url: string }>; groups?: unknown } } } = {};
+    let taskBody: {
+      task?: {
+        status: string;
+        result?: {
+          success: boolean;
+          summary?: {
+            endpointCount: number;
+            leakCount: number;
+            jsFileCount: number;
+          };
+          endpoints?: Array<{ url: string }>;
+          groups?: unknown;
+        };
+      };
+    } = {};
     for (let index = 0; index < 10; index += 1) {
       const taskResponse = await app.inject({
         method: 'GET',
@@ -246,8 +292,10 @@ describe('http api', () => {
 
     expect(taskBody.task?.status).toBe('completed');
     expect(taskBody.task?.result?.success).toBe(true);
-    expect(taskBody.task?.result?.summary?.apiCount).toBe(1);
-    expect(taskBody.task?.result?.apis?.[0]?.url).toBe('/async-compact-api');
+    expect(taskBody.task?.result?.summary?.endpointCount).toBe(taskBody.task?.result?.endpoints?.length);
+    expect(taskBody.task?.result?.summary?.leakCount).toBe(0);
+    expect(taskBody.task?.result?.summary?.jsFileCount).toBe(0);
+    expect(taskBody.task?.result?.endpoints?.[0]?.url).toBe('/async-compact-api');
     expect(taskBody.task?.result?.groups).toBeUndefined();
 
     await app.close();
@@ -297,7 +345,7 @@ describe('http api', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().success).toBe(true);
-    expect(response.json().apis).toEqual(expect.arrayContaining([expect.objectContaining({ url: '/fallback/api' })]));
+    expect(response.json().endpoints).toEqual(expect.arrayContaining([expect.objectContaining({ url: '/fallback/api' })]));
 
     const logFile = join(process.cwd(), 'tmp-test-logs', `${new Date().toISOString().slice(0, 10)}.log`);
     const logText = readFileSync(logFile, 'utf8');
@@ -375,9 +423,9 @@ function testConfig(options?: { authEnabled?: boolean; logDir?: string }): AppCo
       logResponses: true,
       logRawPayloads: false,
       reviewSecrets: true,
-      reviewFindings: true,
+      reviewRiskCandidates: true,
       allowedSecretTypes: [],
-      allowedFindingCategories: [],
+      allowedRiskCategories: [],
     },
   };
 }

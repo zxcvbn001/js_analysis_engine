@@ -103,6 +103,24 @@ export async function analyzeJavaScript(input: {
       findings: rawFindings,
       apis: apiExtraction.apis,
     });
+    logInfo('llm_analysis_summary', {
+      url: input.url,
+      mode: input.mode ?? 'full',
+      enabled: unifiedReview.llm.enabled,
+      secretCandidateCount: unifiedReview.llm.candidateCount,
+      secretQueuedCount: unifiedReview.llm.queuedCount,
+      secretReviewedCount: unifiedReview.llm.reviewedCount,
+      secretConfirmedCount: unifiedReview.llm.confirmedCount,
+      secretRejectedCount: unifiedReview.llm.rejectedCount,
+      secretDroppedCount: unifiedReview.llm.droppedCount,
+      secretBatchCount: unifiedReview.llm.batchCount,
+      findingCandidateCount: unifiedReview.llm.findingCandidateCount,
+      findingReviewedCount: unifiedReview.llm.findingReviewedCount,
+      findingConfirmedCount: unifiedReview.llm.findingConfirmedCount,
+      findingRejectedCount: unifiedReview.llm.findingRejectedCount,
+      findingDroppedCount: unifiedReview.llm.findingDroppedCount,
+      findingBatchCount: unifiedReview.llm.findingBatchCount,
+    });
     const findings = filterUnconfirmedSensitiveFindings({
       findings: unifiedReview.findings,
       secrets: unifiedReview.secrets,

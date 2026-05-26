@@ -132,7 +132,29 @@ describe('secret detection', () => {
     expect(finding?.evidence).toContain('/api/minified-evidence');
   });
 
-  it('classifies security findings across frontend attack surface categories', async () => {
+  it('does not classify validation message templates as SMTP secrets', async () => {
+    const result = await analyzeJavaScript({
+      content: `
+        const emailMessage = '%s is not a valid %s';
+        const mailError = 'email is not a valid email';
+        const smtpHost = 'smtp.example.com';
+      `,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.secrets.some((secret) => secret.type === 'smtp' && secret.value === '%s is not a valid %s')).toBe(false);
+    expect(result.secrets.some((secret) => secret.type === 'smtp' && secret.value === 'email is not a valid email')).toBe(false);
+    expect(result.secrets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'smtp', value: 'smtp.example.com' }),
+    ]));
+  });
+
+  it('classifies security findings across supported frontend attack surface categories', async () => {
     const result = await analyzeJavaScript({
       content: `
         const accessKeyId = 'AKIA1234567890ABCDEF';
@@ -140,13 +162,10 @@ describe('secret detection', () => {
         const wxAppId = 'wx1234567890abcdef';
         const debugUrl = 'https://dev.example.com/debug';
         const intranet = 'http://10.1.2.3/admin';
-        const idCardNo = user.identityNo;
-        const publicKey = '-----BEGIN PUBLIC KEY-----abc';
         const redirectUrl = query.nextUrl;
         const q = gql\`query User { user { id phone } }\`;
         fetch('/graphql', { method: 'POST', body: q });
         fetch(redirectUrl);
-        eval(window.name);
       `,
     });
 
@@ -163,13 +182,11 @@ describe('secret detection', () => {
         '第三方配置',
         '调试信息',
         '内网信息',
-        '业务敏感',
-        '加密逻辑',
-        'SSRF/RCE点',
         'GraphQL',
         '路由信息',
       ]),
     );
+    expect(categories).not.toEqual(expect.arrayContaining(['业务敏感', '加密逻辑', 'SSRF/RCE点']));
     expect(result.findings.some((finding) => finding.type === 'api-endpoint' && finding.value === '/graphql')).toBe(true);
     expect(result.groups.endpoints.apis.some((api) => api.url === '/graphql')).toBe(true);
     expect(result.groups.exposures.findings.length).toBeGreaterThan(0);
@@ -183,7 +200,6 @@ describe('secret detection', () => {
         ${repeated}
         const token = 'Bearer abcdefghijklmnopqrstuvwxyz12345';
         const aws = 'AKIA1234567890ABCDEF';
-        eval(window.name);
         fetch('/api/critical/deleteUser');
       `,
       mode: 'fast',
@@ -195,7 +211,6 @@ describe('secret detection', () => {
     }
 
     expect(result.findings.length).toBeLessThanOrEqual(1000);
-    expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'client-code-execution')).toBe(true);
     expect(result.findings.some((finding) => finding.severity === 'high' && finding.type === 'token')).toBe(true);
     expect(result.findings.some((finding) => finding.type === 'access-key')).toBe(true);
 
@@ -456,6 +471,9 @@ describe('secret detection', () => {
     expect(logText).toContain('llm_unified_review_decision');
     expect(logText).toContain('llm_unified_batch_start');
     expect(logText).toContain('llm_unified_batch_completed');
+    expect(logText).toContain('llm_analysis_summary');
+    expect(logText).toContain('secretCandidateCount');
+    expect(logText).toContain('findingCandidateCount');
     expect(logText).toContain('secretIds');
     expect(logText).toContain('findingIds');
   });
@@ -619,6 +637,80 @@ describe('secret detection', () => {
     expect(Number(promptLengthMatch?.[1] ?? 0)).toBeLessThan(12000);
   });
 
+  it('retries transient LLM provider network failures once', async () => {
+    configureFileLogger({ fileEnabled: true, directory: 'tmp-test-llm-logs', level: 'info' });
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    globalThis.fetch = async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        throw new TypeError('fetch failed', {
+          cause: new Error('other side closed'),
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                secrets: [],
+                findings: [{
+                  id: 'finding-1',
+                  is_risk: true,
+                  category: 'API 信息',
+                  type: 'api-endpoint',
+                  severity: 'medium',
+                  confidence: 0.9,
+                  reason: 'confirmed after retry',
+                }],
+              }),
+            },
+          }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    };
+
+    try {
+      const provider = new DeepSeekProvider({
+        apiKey: 'test-key',
+        baseUrl: 'https://llm.example',
+        model: 'deepseek-test',
+        timeoutMs: 8000,
+        logPrompts: false,
+        logResponses: false,
+        logRawPayloads: false,
+      });
+
+      const result = await provider.analyzeUnifiedBatch({
+        apis: [],
+        secrets: [],
+        findings: [{
+          id: 'finding-1',
+          finding: {
+            category: 'API 信息',
+            type: 'api-endpoint',
+            value: '/api/retry',
+            severity: 'medium',
+            confidence: 0.8,
+            source: 'api',
+            evidence: "fetch('/api/retry')",
+          },
+        }],
+      });
+
+      expect(result.findings[0]?.reason).toBe('confirmed after retry');
+      expect(callCount).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const logFile = join(process.cwd(), 'tmp-test-llm-logs', `${new Date().toISOString().slice(0, 10)}.log`);
+    const logText = readFileSync(logFile, 'utf8');
+    expect(logText).toContain('llm_provider_request_retry');
+  });
+
   it('reviews all findings with LLM in full mode and drops rejected findings', async () => {
     const reviewedTypes: string[] = [];
     const provider: LLMProvider = {
@@ -683,6 +775,7 @@ describe('secret detection', () => {
   });
 
   it('preserves rule findings when LLM finding review fails', async () => {
+    let callCount = 0;
     const provider: LLMProvider = {
       async analyzeSecret() {
         throw new Error('secret path should not be used');
@@ -691,12 +784,13 @@ describe('secret detection', () => {
         return [];
       },
       async analyzeUnifiedBatch() {
+        callCount += 1;
         throw new Error('llm timeout');
       },
     };
 
     const result = await analyzeJavaScript({
-      content: "fetch('/api/preserved');",
+      content: Array.from({ length: 18 }, (_, index) => `fetch('/api/preserved-${index}');`).join('\n'),
       mode: 'full',
       llmAnalyzer: new LLMSecretAnalyzer(provider),
       unifiedLlmAnalyzer: new LLMUnifiedAnalyzer(provider),
@@ -707,9 +801,11 @@ describe('secret detection', () => {
       return;
     }
 
-    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'api-endpoint', value: '/api/preserved' })]));
+    expect(callCount).toBe(1);
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'api-endpoint', value: '/api/preserved-0' })]));
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'api-endpoint', value: '/api/preserved-17' })]));
     expect(result.findings.some((finding) => finding.llmReview?.reason.includes('preserved'))).toBe(true);
-    expect(result.meta.analysis.llm.findingDroppedCount).toBeGreaterThan(0);
+    expect(result.meta.analysis.llm.findingDroppedCount).toBe(result.meta.analysis.llm.findingCandidateCount);
   });
 
   it('allows configuring which findings enter LLM review', async () => {
@@ -728,9 +824,9 @@ describe('secret detection', () => {
         logResponses: false,
         logRawPayloads: false,
         reviewSecrets: false,
-        reviewFindings: true,
+        reviewRiskCandidates: true,
         allowedSecretTypes: [],
-        allowedFindingCategories: ['API 信息'],
+        allowedRiskCategories: ['API 信息'],
       },
     });
 
@@ -800,9 +896,9 @@ describe('secret detection', () => {
         logResponses: false,
         logRawPayloads: false,
         reviewSecrets: true,
-        reviewFindings: false,
+        reviewRiskCandidates: false,
         allowedSecretTypes: ['bearer-token'],
-        allowedFindingCategories: [],
+        allowedRiskCategories: [],
       },
     });
 

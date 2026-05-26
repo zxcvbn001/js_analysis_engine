@@ -12,6 +12,11 @@ const levelRank: Record<LogLevel, number> = {
 };
 
 let loggingConfigOverride: AppConfig['logging'] | undefined;
+let llmConsoleLoggerOverride: {
+  enabled: boolean;
+  stdout: LogStream;
+  stderr: LogStream;
+} | undefined;
 
 export interface LogFields {
   [key: string]: unknown;
@@ -29,6 +34,19 @@ export function configureFileLogger(config: AppConfig['logging']): void {
   loggingConfigOverride = config;
 }
 
+export function configureLlmConsoleLogger(config?: { enabled?: boolean; stdout?: LogStream; stderr?: LogStream }): void {
+  if (!config) {
+    llmConsoleLoggerOverride = undefined;
+    return;
+  }
+
+  llmConsoleLoggerOverride = {
+    enabled: config.enabled ?? true,
+    stdout: config.stdout ?? process.stdout,
+    stderr: config.stderr ?? process.stderr,
+  };
+}
+
 export function logInfo(message: string, fields: LogFields = {}): void {
   writeLog('info', message, fields);
 }
@@ -43,15 +61,7 @@ export function logError(message: string, fields: LogFields = {}): void {
 
 function writeLog(level: LogLevel, message: string, fields: LogFields): void {
   const config = loggingConfigOverride ?? getConfig().logging;
-  if (!config.fileEnabled || levelRank[level] < levelRank[config.level]) {
-    return;
-  }
-
-  const directory = resolve(process.cwd(), config.directory);
-  mkdirSync(directory, { recursive: true });
-
   const now = new Date();
-  const fileName = `${now.toISOString().slice(0, 10)}.log`;
   const payload = {
     time: now.toISOString(),
     level,
@@ -59,8 +69,23 @@ function writeLog(level: LogLevel, message: string, fields: LogFields): void {
     ...fields,
   };
   const line = formatLogLine(payload);
+  const levelEnabled = levelRank[level] >= levelRank[config.level];
 
-  appendFileSync(resolve(directory, fileName), `${line}\n`, 'utf8');
+  if (config.fileEnabled && levelEnabled) {
+    const directory = resolve(process.cwd(), config.directory);
+    mkdirSync(directory, { recursive: true });
+
+    const fileName = `${now.toISOString().slice(0, 10)}.log`;
+    appendFileSync(resolve(directory, fileName), `${line}\n`, 'utf8');
+  }
+
+  if (levelEnabled && isLlmLogEvent(message)) {
+    const consoleLogger = resolveLlmConsoleLogger();
+    if (consoleLogger.enabled) {
+      const output = level === 'error' ? consoleLogger.stderr : consoleLogger.stdout;
+      output.write(`${line}\n`);
+    }
+  }
 }
 
 export function errorFields(error: unknown): LogFields {
@@ -220,6 +245,31 @@ function normalizePinoTime(value: unknown): string {
     return value;
   }
   return new Date().toISOString();
+}
+
+function isLlmLogEvent(message: string): boolean {
+  return message.startsWith('llm_') || message === 'analyze_js_llm_runtime';
+}
+
+function resolveLlmConsoleLogger(): { enabled: boolean; stdout: LogStream; stderr: LogStream } {
+  if (llmConsoleLoggerOverride) {
+    return llmConsoleLoggerOverride;
+  }
+
+  const env = process.env.LOG_LLM_CONSOLE;
+  if (env) {
+    return {
+      enabled: ['1', 'true', 'yes', 'on'].includes(env.toLowerCase()),
+      stdout: process.stdout,
+      stderr: process.stderr,
+    };
+  }
+
+  return {
+    enabled: process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test',
+    stdout: process.stdout,
+    stderr: process.stderr,
+  };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

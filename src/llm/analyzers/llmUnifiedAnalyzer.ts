@@ -2,7 +2,7 @@ import type { FindingReviewContext, LLMFindingReviewResult, LLMProvider, LLMSecr
 import type { ApiResult, AnalyzeMode, FindingResult, SecretResult } from '../../types/results.js';
 import { getConfig } from '../../config/appConfig.js';
 import { sha256 } from '../../utils/hash.js';
-import { errorFields, logError, logInfo } from '../../utils/logger.js';
+import { errorFields, logError, logInfo, logWarn } from '../../utils/logger.js';
 
 export interface UnifiedReviewOutput {
   secrets: SecretResult[];
@@ -47,12 +47,12 @@ export class LLMUnifiedAnalyzer {
     const llmConfig = getConfig().llm;
     const enabled = Boolean(this.provider?.analyzeUnifiedBatch);
     const secretTypeAllowList = new Set(llmConfig.allowedSecretTypes);
-    const findingCategoryAllowList = new Set(llmConfig.allowedFindingCategories);
+    const riskCategoryAllowList = new Set(llmConfig.allowedRiskCategories);
     const reviewSecretsEnabled = llmConfig.reviewSecrets;
-    const reviewFindingsEnabled = llmConfig.reviewFindings;
+    const reviewRiskCandidatesEnabled = llmConfig.reviewRiskCandidates;
     const reviewableSecrets = input.secrets.filter((context) => reviewSecretsEnabled && matchesAllowList(secretTypeAllowList, context.candidate.type));
     const passthroughSecrets = input.secrets.filter((context) => !reviewableSecrets.includes(context));
-    const reviewableFindings = input.findings.filter((finding) => reviewFindingsEnabled && matchesAllowList(findingCategoryAllowList, finding.category));
+    const reviewableFindings = input.findings.filter((finding) => reviewRiskCandidatesEnabled && matchesAllowList(riskCategoryAllowList, finding.category));
     const passthroughFindings = input.findings.filter((finding) => !reviewableFindings.includes(finding));
     const llm = {
       enabled,
@@ -78,9 +78,9 @@ export class LLMUnifiedAnalyzer {
       secretCandidateCount: reviewableSecrets.length,
       findingCandidateCount: reviewableFindings.length,
       secretReviewEnabled: reviewSecretsEnabled,
-      findingReviewEnabled: reviewFindingsEnabled,
+      riskCandidateReviewEnabled: reviewRiskCandidatesEnabled,
       allowedSecretTypes: llmConfig.allowedSecretTypes,
-      allowedFindingCategories: llmConfig.allowedFindingCategories,
+      allowedRiskCategories: llmConfig.allowedRiskCategories,
       skippedSecretCount: passthroughSecrets.length,
       skippedFindingCount: passthroughFindings.length,
       reason: input.mode !== 'full'
@@ -103,9 +103,9 @@ export class LLMUnifiedAnalyzer {
         secretCandidateCount: reviewableSecrets.length,
         findingCandidateCount: reviewableFindings.length,
         secretReviewEnabled: reviewSecretsEnabled,
-        findingReviewEnabled: reviewFindingsEnabled,
+        riskCandidateReviewEnabled: reviewRiskCandidatesEnabled,
         allowedSecretTypes: llmConfig.allowedSecretTypes,
-        allowedFindingCategories: llmConfig.allowedFindingCategories,
+        allowedRiskCategories: llmConfig.allowedRiskCategories,
         skippedSecretCount: passthroughSecrets.length,
         skippedFindingCount: passthroughFindings.length,
       });
@@ -185,17 +185,33 @@ export class LLMUnifiedAnalyzer {
           confirmedFindingCount: result.findings.filter((finding) => finding.is_risk).length,
         });
       } catch (error) {
-        llm.droppedCount += secretBatch.length;
-        llm.findingDroppedCount += findingBatch.length;
-        reviewedSecrets.push(...secretBatch.map(fallbackSecret));
-        reviewedFindings.push(...findingBatch.map((context) => preservedFinding(context.finding)));
+        const remainingSecretBatches = secretBatches.slice(index + 1).flat();
+        const remainingFindingBatches = findingBatches.slice(index + 1).flat();
+        const preservedSecrets = [...secretBatch, ...remainingSecretBatches];
+        const preservedFindings = [...findingBatch, ...remainingFindingBatches];
+        llm.droppedCount += preservedSecrets.length;
+        llm.findingDroppedCount += preservedFindings.length;
+        reviewedSecrets.push(...preservedSecrets.map(fallbackSecret));
+        reviewedFindings.push(...preservedFindings.map((context) => preservedFinding(context.finding)));
         logError('llm_unified_batch_failed', {
           batchIndex: index + 1,
           durationMs: Date.now() - startedAt,
           preservedSecretCount: secretBatch.length,
           preservedFindingCount: findingBatch.length,
+          remainingPreservedSecretCount: remainingSecretBatches.length,
+          remainingPreservedFindingCount: remainingFindingBatches.length,
           ...errorFields(error),
         });
+        if (remainingSecretBatches.length > 0 || remainingFindingBatches.length > 0) {
+          logWarn('llm_unified_review_stopped_after_failure', {
+            failedBatchIndex: index + 1,
+            totalBatchCount: batchCount,
+            remainingSecretCount: remainingSecretBatches.length,
+            remainingFindingCount: remainingFindingBatches.length,
+            reason: 'LLM batch failed; remaining candidates are preserved without more LLM calls so analysis can return.',
+          });
+        }
+        break;
       }
     }
 

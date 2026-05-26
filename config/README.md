@@ -37,13 +37,16 @@ LLM_LOG_PROMPTS=true
 LLM_LOG_RESPONSES=true
 LLM_LOG_RAW_PAYLOADS=false
 LLM_REVIEW_SECRETS=true
-LLM_REVIEW_FINDINGS=true
+LLM_REVIEW_RISK_CANDIDATES=true
 LLM_ALLOWED_SECRET_TYPES=bearer-token,aws-key
-LLM_ALLOWED_FINDING_CATEGORIES=敏感凭据,云配置,JWT/OAuth
+LLM_ALLOWED_RISK_CATEGORIES=敏感凭据,云配置,JWT/OAuth
+LOG_LLM_CONSOLE=true
 ```
 
 LLM prompt/response logs are redacted by default. Set `LLM_LOG_RAW_PAYLOADS=true`
 only for short-term debugging because raw prompts can contain sensitive code context.
+LLM logs are also mirrored to the process console by default. Set
+`LOG_LLM_CONSOLE=false` to keep them in the log file only.
 
 LLM review scope can be narrowed to reduce timeout risk:
 
@@ -51,20 +54,20 @@ LLM review scope can be narrowed to reduce timeout risk:
 LLM_REVIEW_SECRETS=false
   Disable secret candidate review entirely. Full mode keeps regex/rule secret results.
 
-LLM_REVIEW_FINDINGS=false
-  Disable finding review entirely. Full mode keeps rule findings.
+LLM_REVIEW_RISK_CANDIDATES=false
+  Disable risk candidate review entirely. Full mode keeps rule results.
 
 LLM_ALLOWED_SECRET_TYPES=type1,type2
   Only these secret types enter LLM. Empty means all types.
 
-LLM_ALLOWED_FINDING_CATEGORIES=分类1,分类2
-  Only these finding categories enter LLM. Empty means all categories.
+LLM_ALLOWED_RISK_CATEGORIES=分类1,分类2
+  Only these risk candidate categories enter LLM. Empty means all categories.
 ```
 
 When `auth.enabled` is true, all analysis APIs require the configured API key header.
 `GET /health` remains unauthenticated for health checks.
 
-File logs are written as JSON Lines files by date:
+File logs are written as readable text lines by date:
 
 ```text
 logs/YYYY-MM-DD.log
