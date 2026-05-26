@@ -98,6 +98,40 @@ describe('secret detection', () => {
     }
   });
 
+  it('keeps matched secret values visible in evidence for minified single-line bundles', async () => {
+    const longLine = `const prefix='${'x'.repeat(9000)}';const password='admin123456';const suffix='${'y'.repeat(9000)}';`;
+    const result = await analyzeJavaScript({
+      content: longLine,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    const secret = result.secrets.find((item) => item.value === 'admin123456');
+    expect(secret).toBeTruthy();
+    expect(secret?.evidence).toContain('admin123456');
+  });
+
+  it('keeps matched api values visible in evidence for minified single-line bundles', async () => {
+    const longLine = `const prefix='${'x'.repeat(9000)}';fetch('/api/minified-evidence');const suffix='${'y'.repeat(9000)}';`;
+    const result = await analyzeJavaScript({
+      content: longLine,
+      mode: 'fast',
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    const finding = result.findings.find((item) => item.type === 'api-endpoint' && item.value === '/api/minified-evidence');
+    expect(finding).toBeTruthy();
+    expect(finding?.evidence).toContain('/api/minified-evidence');
+  });
+
   it('classifies security findings across frontend attack surface categories', async () => {
     const result = await analyzeJavaScript({
       content: `

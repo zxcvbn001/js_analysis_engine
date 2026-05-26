@@ -1,20 +1,22 @@
 import type { ApiResult } from '../../types/results.js';
 import type { SecretCandidate, SecretContext } from '../../types/llm.js';
+import { buildEvidenceSnippet } from '../../utils/evidence.js';
 
 const DEFAULT_RADIUS = 20;
 const MAX_CONTEXT_CHARS = 4000;
-const MAX_LINE_CHARS = 500;
 
 export function extractSecretContext(content: string, candidate: SecretCandidate, apis: ApiResult[], radius = DEFAULT_RADIUS): SecretContext {
   const lines = content.split(/\r?\n/);
   const line = candidate.line ?? 1;
-  const start = Math.max(1, line - radius);
-  const end = Math.min(lines.length, line + radius);
-  const context = lines
-    .slice(start - 1, end)
-    .map((text, index) => `${start + index}: ${trimLine(text)}`)
-    .join('\n')
-    .slice(0, MAX_CONTEXT_CHARS);
+  const context = buildEvidenceSnippet({
+    content,
+    value: candidate.value,
+    line,
+    column: candidate.column,
+    lineRadius: radius,
+    charRadius: 1200,
+    maxChars: MAX_CONTEXT_CHARS,
+  }) ?? '';
 
   const nearbyApis = apis
     .filter((api) => context.includes(api.url))
@@ -28,10 +30,6 @@ export function extractSecretContext(content: string, candidate: SecretCandidate
     nearbyApis,
     nearbyHeaders,
   };
-}
-
-function trimLine(text: string): string {
-  return text.length > MAX_LINE_CHARS ? `${text.slice(0, MAX_LINE_CHARS)}... [truncated ${text.length - MAX_LINE_CHARS} chars]` : text;
 }
 
 function inferFunctionName(lines: string[], line: number): string | undefined {

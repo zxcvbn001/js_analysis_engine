@@ -3,6 +3,7 @@ import type { SecretCandidate } from '../../types/llm.js';
 import type { Severity } from '../../types/results.js';
 import { sha256 } from '../../utils/hash.js';
 import { traverseAst } from '../../engine/traverser/traverseAst.js';
+import { buildEvidenceSnippet } from '../../utils/evidence.js';
 
 interface PatternRule {
   type: string;
@@ -26,11 +27,8 @@ const rules: PatternRule[] = [
 
 const lowRiskHtmlPattern = /<input\b[^>]*type=["']?password/i;
 const MAX_CANDIDATES = 300;
-const MAX_EVIDENCE_LINE_CHARS = 500;
-
 export function findSecretCandidates(ast: t.File, content?: string): SecretCandidate[] {
   const candidates: SecretCandidate[] = [];
-  const lines = content?.split(/\r?\n/) ?? [];
 
   traverseAst(ast, {
     VariableDeclarator(path) {
@@ -45,7 +43,7 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
 
       const value = literalValue(path.node.init);
       const line = path.node.loc?.start.line;
-      candidates.push(...matchCandidate(value, variableName, line, path.node.loc?.start.column, contextAround(lines, line)));
+      candidates.push(...matchCandidate(content, value, variableName, line, path.node.loc?.start.column));
     },
     ObjectProperty(path) {
       if (candidates.length >= MAX_CANDIDATES) {
@@ -55,7 +53,7 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
       const variableName = propertyName(path.node.key);
       const value = literalValue(path.node.value);
       const line = path.node.loc?.start.line;
-      candidates.push(...matchCandidate(value, variableName, line, path.node.loc?.start.column, contextAround(lines, line)));
+      candidates.push(...matchCandidate(content, value, variableName, line, path.node.loc?.start.column));
     },
     StringLiteral(path) {
       if (candidates.length >= MAX_CANDIDATES) {
@@ -63,7 +61,7 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
         return;
       }
       const line = path.node.loc?.start.line;
-      candidates.push(...matchCandidate(path.node.value, undefined, line, path.node.loc?.start.column, contextAround(lines, line)));
+      candidates.push(...matchCandidate(content, path.node.value, undefined, line, path.node.loc?.start.column));
     },
     TemplateElement(path) {
       if (candidates.length >= MAX_CANDIDATES) {
@@ -72,7 +70,7 @@ export function findSecretCandidates(ast: t.File, content?: string): SecretCandi
       }
       const value = path.node.value.cooked ?? path.node.value.raw;
       const line = path.node.loc?.start.line;
-      candidates.push(...matchCandidate(value, undefined, line, path.node.loc?.start.column, contextAround(lines, line)));
+      candidates.push(...matchCandidate(content, value, undefined, line, path.node.loc?.start.column));
     },
   });
 
@@ -98,14 +96,14 @@ export function findSecretCandidatesInText(content: string): SecretCandidate[] {
 
     const lineNumber = index + 1;
     for (const { name, value } of extractAssignments(line)) {
-      candidates.push(...matchCandidate(value, name, lineNumber, Math.max(0, line.indexOf(name ?? value ?? '')), contextAround(lines, lineNumber)));
+      candidates.push(...matchCandidate(content, value, name, lineNumber, Math.max(0, line.indexOf(value ?? name ?? ''))));
       if (candidates.length >= MAX_CANDIDATES) {
         break;
       }
     }
 
     for (const value of extractSecretLikeValues(line)) {
-      candidates.push(...matchCandidate(value, undefined, lineNumber, Math.max(0, line.indexOf(value)), contextAround(lines, lineNumber)));
+      candidates.push(...matchCandidate(content, value, undefined, lineNumber, Math.max(0, line.indexOf(value))));
       if (candidates.length >= MAX_CANDIDATES) {
         break;
       }
@@ -122,12 +120,20 @@ export function findSecretCandidatesInText(content: string): SecretCandidate[] {
   });
 }
 
-function matchCandidate(value: string | undefined, variableName?: string, line?: number, column?: number, context?: string): SecretCandidate[] {
+function matchCandidate(content: string | undefined, value: string | undefined, variableName?: string, line?: number, column?: number): SecretCandidate[] {
   if (!value && !variableName) {
     return [];
   }
 
   const text = value ?? '';
+  const context = content
+    ? buildEvidenceSnippet({
+        content,
+        value: value ?? variableName,
+        line,
+        column,
+      })
+    : undefined;
   if (lowRiskHtmlPattern.test(text)) {
     return [buildCandidate('html-password-input', 'low', text, 'Password input field, not a hardcoded credential.', line, column, variableName, context)];
   }
@@ -239,20 +245,4 @@ function extractSecretLikeValues(line: string): string[] {
   }
 
   return [...values];
-}
-
-function contextAround(lines: string[], line?: number, radius = 2): string | undefined {
-  if (!line || lines.length === 0) {
-    return undefined;
-  }
-  const start = Math.max(1, line - radius);
-  const end = Math.min(lines.length, line + radius);
-  return lines
-    .slice(start - 1, end)
-    .map((text, index) => `${start + index}: ${trimLine(text)}`)
-    .join('\n');
-}
-
-function trimLine(text: string): string {
-  return text.length > MAX_EVIDENCE_LINE_CHARS ? `${text.slice(0, MAX_EVIDENCE_LINE_CHARS)}... [truncated ${text.length - MAX_EVIDENCE_LINE_CHARS} chars]` : text;
 }

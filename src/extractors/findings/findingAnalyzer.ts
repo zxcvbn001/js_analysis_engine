@@ -3,6 +3,7 @@ import { calleeName } from '../../engine/propagation/stringResolver.js';
 import { traverseAst } from '../../engine/traverser/traverseAst.js';
 import type { ApiResult, AssetResult, FindingResult, RiskResult, SecretResult, Severity } from '../../types/results.js';
 import { uniqueBy } from '../../utils/dedupe.js';
+import { buildEvidenceSnippet, contextAroundLines } from '../../utils/evidence.js';
 
 interface FindingRule {
   category: string;
@@ -48,7 +49,6 @@ const callRules: FindingRule[] = [
 const MAX_FINDINGS = 1000;
 const MAX_FINDINGS_PER_TYPE = 80;
 const MAX_FINDINGS_PER_CATEGORY = 200;
-const MAX_EVIDENCE_LINE_CHARS = 500;
 const MAX_EVIDENCE_CHARS = 2500;
 
 export function analyzeFindings(input: {
@@ -132,7 +132,13 @@ export function analyzeFindings(input: {
       }
       const name = t.isIdentifier(path.node.id) ? path.node.id.name : undefined;
       const value = literalText(path.node.init);
-      pushFindings(matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
+      pushFindings(matchRules(
+        value,
+        name,
+        name ? 'identifier' : 'string',
+        buildEvidenceSnippet({ content: input.content, value: value ?? name, line: path.node.loc?.start.line, column: path.node.loc?.start.column, maxChars: MAX_EVIDENCE_CHARS })
+          ?? evidenceOf(name, value),
+      ));
     },
     ObjectProperty(path) {
       if (findings.length >= MAX_FINDINGS * 3) {
@@ -141,14 +147,26 @@ export function analyzeFindings(input: {
       }
       const name = propertyName(path.node.key);
       const value = literalText(path.node.value);
-      pushFindings(matchRules(value, name, name ? 'identifier' : 'string', contextAround(lines, path.node.loc?.start.line) ?? evidenceOf(name, value)));
+      pushFindings(matchRules(
+        value,
+        name,
+        name ? 'identifier' : 'string',
+        buildEvidenceSnippet({ content: input.content, value: value ?? name, line: path.node.loc?.start.line, column: path.node.loc?.start.column, maxChars: MAX_EVIDENCE_CHARS })
+          ?? evidenceOf(name, value),
+      ));
     },
     StringLiteral(path) {
       if (findings.length >= MAX_FINDINGS * 3) {
         path.stop();
         return;
       }
-      pushFindings(matchRules(path.node.value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? path.node.value));
+      pushFindings(matchRules(
+        path.node.value,
+        undefined,
+        'string',
+        buildEvidenceSnippet({ content: input.content, value: path.node.value, line: path.node.loc?.start.line, column: path.node.loc?.start.column, maxChars: MAX_EVIDENCE_CHARS })
+          ?? path.node.value,
+      ));
     },
     TemplateElement(path) {
       if (findings.length >= MAX_FINDINGS * 3) {
@@ -156,7 +174,13 @@ export function analyzeFindings(input: {
         return;
       }
       const value = path.node.value.cooked ?? path.node.value.raw;
-      pushFindings(matchRules(value, undefined, 'string', contextAround(lines, path.node.loc?.start.line) ?? value));
+      pushFindings(matchRules(
+        value,
+        undefined,
+        'string',
+        buildEvidenceSnippet({ content: input.content, value, line: path.node.loc?.start.line, column: path.node.loc?.start.column, maxChars: MAX_EVIDENCE_CHARS })
+          ?? value,
+      ));
     },
     CallExpression(path) {
       if (findings.length >= MAX_FINDINGS * 3) {
@@ -172,7 +196,8 @@ export function analyzeFindings(input: {
           severity: 'medium',
           confidence: 0.55,
           source: 'call',
-          evidence: contextAround(lines, path.node.loc?.start.line) ?? `call:${name}`,
+          evidence: buildEvidenceSnippet({ content: input.content, value: name, line: path.node.loc?.start.line, column: path.node.loc?.start.column, maxChars: MAX_EVIDENCE_CHARS })
+            ?? `call:${name}`,
         }]);
       }
     },
@@ -326,22 +351,10 @@ function evidenceForApi(content: string, lines: string[], api: ApiResult): strin
       continue;
     }
     const line = content.slice(0, index).split(/\r?\n/).length;
-    return contextAround(lines, line);
+    return buildEvidenceSnippet({ content, value: candidate, line, maxChars: MAX_EVIDENCE_CHARS })
+      ?? contextAroundLines(lines, line, 2, MAX_EVIDENCE_CHARS);
   }
   return undefined;
-}
-
-function contextAround(lines: string[], line?: number, radius = 2): string | undefined {
-  if (!line || lines.length === 0) {
-    return undefined;
-  }
-  const start = Math.max(1, line - radius);
-  const end = Math.min(lines.length, line + radius);
-  return lines
-    .slice(start - 1, end)
-    .map((text, index) => `${start + index}: ${trimLine(text)}`)
-    .join('\n')
-    .slice(0, MAX_EVIDENCE_CHARS);
 }
 
 function normalizeFinding(finding: FindingResult): FindingResult {
@@ -454,10 +467,6 @@ function normalizeValue(value?: string): string {
     return '';
   }
   return value.trim().slice(0, 220);
-}
-
-function trimLine(text: string): string {
-  return text.length > MAX_EVIDENCE_LINE_CHARS ? `${text.slice(0, MAX_EVIDENCE_LINE_CHARS)}... [truncated ${text.length - MAX_EVIDENCE_LINE_CHARS} chars]` : text;
 }
 
 function trimText(text: string, max: number): string {
